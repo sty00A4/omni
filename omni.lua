@@ -135,12 +135,12 @@ local function lex(fn, text)
         if table.containsKey(S, char) then
             local s = char
             advance()
-            if table.containsKey(S, s..char) then
-                table.insert(tokens, Token(S[s..char], nil, pos, pos))
-                advance()
-            else
-                table.insert(tokens, Token(S[s], nil, pos, pos))
-            end
+            if char then
+                if table.containsKey(S, s..char) then
+                    table.insert(tokens, Token(S[s..char], nil, pos, pos))
+                    advance()
+                else table.insert(tokens, Token(S[s], nil, pos, pos)) end
+            else table.insert(tokens, Token(S[s], nil, pos, pos)) end
         elseif table.contains(CHARS, char) then
             local start = pos
             local name = ""
@@ -174,7 +174,7 @@ local function lex(fn, text)
             else
                 local str = char
                 advance()
-                while char ~= '"' do
+                while char ~= '"' and char do
                     str = str .. char
                     advance()
                 end
@@ -347,77 +347,84 @@ function Value()
                  if self.type == "number" then
                      local left = self
                      local right
-                     if other.tonum then right = other.tonum(other) end
-                     if right then return Number(left.value + right.value), nil
-                     else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then return Number(left.value + right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
                  elseif self.type == "string" then
                      local left = self
                      local right
-                     if other.tostr then right = other.tostr(other) end
-                     if right then return String(left.value .. right.value), nil
-                     else return nil, "ERROR: cannot cast "..other.type.." to string" end
-                 else
-                     if RETURN then return nil, "ERROR: cannot add "..other.type.." with "..self.type end
-                     local value, err = other.add(other, self, true)
-                     return value, err
+                     if other.tostr then
+                         right = other.tostr(other)
+                         if right then return String(left.value .. right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to string" end
+                     end
                  end
+                 if RETURN then return nil, "ERROR: cannot add "..other.type.." with "..self.type end
+                 local value, err = other.add(other, self, true)
+                 return value, err
              end,
              sub = function(self, other, RETURN)
                  if self.type == "number" then
                      local left = self
                      local right
-                     if other.tonum then right = other.tonum(other) end
-                     if right then return Number(left.value - right.value), nil
-                     else return nil, "ERROR: cannot cast "..other.type.." to number" end
-                 else
-                     if RETURN then return nil, "ERROR: cannot sub "..other.type.." with "..self.type end
-                     local value, err = other.sub(other, self, true)
-                     return value, err
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then return Number(left.value - right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
                  end
+                 if RETURN then return nil, "ERROR: cannot subtract "..other.type.." with "..self.type end
+                 local value, err = other.sub(other, self, true)
+                 return value, err
              end,
              mul = function(self, other, RETURN)
                  if self.type == "number" then
                      local left = self
                      local right
-                     if other.tonum then right = other.tonum(other) end
-                     if right then return Number(left.value * right.value), nil
-                     else return nil, "ERROR: cannot cast "..other.type.." to number" end
-                 else
-                     if RETURN then return nil, "ERROR: cannot sub "..other.type.." with "..self.type end
-                     local value, err = other.sub(other, self, true)
-                     return value, err
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then return Number(left.value * right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
                  end
+                 if RETURN then return nil, "ERROR: cannot multiply "..other.type.." with "..self.type end
+                 local value, err = other.sub(other, self, true)
+                 return value, err
              end,
              div = function(self, other, RETURN)
                  if self.type == "number" then
                      local left = self
                      local right
-                     if other.tonum then right = other.tonum(other) end
-                     if right then
-                         if left.value == 0 then
-                             return Number(0), nil
-                         else
-                             return Number(left.value / right.value), nil
-                         end
-                     else return nil, "ERROR: cannot cast "..other.type.." to number" end
-                 else
-                     if RETURN then return nil, "ERROR: cannot div "..other.type.." with "..self.type end
-                     local value, err = other.div(other, self, true)
-                     return value, err
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then
+                             if left.value == 0 then
+                                 return Number(0), nil
+                             else
+                                 return Number(left.value / right.value), nil
+                             end
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
                  end
+                 if RETURN then return nil, "ERROR: cannot div "..other.type.." with "..self.type end
+                 local value, err = other.div(other, self, true)
+                 return value, err
              end,
              divint = function(self, other, RETURN)
                  if self.type == "number" then
                      local left = self
                      local right
-                     if other.tonum then right = other.tonum(other) end
-                     if right then return Number(left.value // right.value), nil
-                     else return nil, "ERROR: cannot cast "..other.type.." to number" end
-                 else
-                     if RETURN then return nil, "ERROR: cannot div "..other.type.." with "..self.type end
-                     local value, err = other.divint(other, self, true)
-                     return value, err
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then return Number(left.value // right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
                  end
+                 if RETURN then return nil, "ERROR: cannot div "..other.type.." with "..self.type end
+                 local value, err = other.divint(other, self, true)
+                 return value, err
              end,
     }
 end
