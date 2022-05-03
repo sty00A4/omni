@@ -115,7 +115,13 @@ end
 local function Token(type, value, pos_start, pos_end)
     return { type = type, value = value, pos_start = pos_start, pos_end = pos_end,
              matches = function(self, token) return self.type == token.type and self.value == token.value end,
-             repr = function(self) if self.value ~= nil then return "("..self.type..", "..tostring(self.value)..")" else return "("..self.type..")" end end
+             repr = function(self)
+                 if self.value == nil then
+                     return "["..self.type.."]"
+                 else
+                     return "["..tostring(self.value).."]"
+                 end
+             end
     }
 end
 local function lex(fn, text)
@@ -193,37 +199,37 @@ end
 ---Parser
 function ValAssignNode(name_tok, expr)
     return { type = "varAssignNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
-             repr = function(self) return "("..self.type.." "..tostring(self.name_tok).." "..tostring(self.expr)..")" end
+             repr = function(self) return "( val "..tostring(self.name_tok).." "..tostring(self.expr).." )" end
     }
 end
 function BinOpNode(left, op_tok, right)
     return { type = "binOpNode", left = left, op_tok = op_tok, right = right, pos_start = left.pos_start, pos_end = right.pos_end,
-             repr = function(self) return "("..self.type.." "..tostring(self.left).." "..tostring(self.op_tok).." "..tostring(self.right)..")" end
+             repr = function(self) return "( "..tostring(self.left).." "..tostring(self.op_tok).." "..tostring(self.right).." )" end
     }
 end
 function UnaryOpNode(op_tok, node)
     return { type = "unaryOpNode", node = node, op_tok = op_tok, pos_start = op_tok.pos_start, pos_end = node.pos_end,
-             repr = function(self) return "("..self.type.." "..tostring(self.op_tok).." "..tostring(self.node)..")" end
+             repr = function(self) return "( "..tostring(self.op_tok).." "..tostring(self.node).." )" end
     }
 end
 function NumberNode(number_tok)
     return { type = "numberNode", number_tok = number_tok, pos_start = number_tok.pos_start, pos_end = number_tok.pos_end,
-             repr = function(self) return "("..self.type.." "..tostring(self.number_tok)..")" end
+             repr = function(self) return tostring(self.number_tok) end
     }
 end
 function BoolNode(bool_tok)
     return { type = "boolNode", bool_tok = bool_tok, pos_start = bool_tok.pos_start, pos_end = bool_tok.pos_end,
-             repr = function(self) return "("..self.type.." "..tostring(self.bool_tok)..")" end
+             repr = function(self) return tostring(self.bool_tok) end
     }
 end
 function StringNode(string_tok)
     return { type = "stringNode", string_tok = string_tok, pos_start = string_tok.pos_start, pos_end = string_tok.pos_end,
-             repr = function(self) return "("..self.type.." \""..tostring(self.string_tok).."\")" end
+             repr = function(self) return "\""..tostring(self.string_tok).."\"" end
     }
 end
 function NullNode(null_tok)
     return { type = "nullNode", null_tok = null_tok, pos_start = null_tok.pos_start, pos_end = null_tok.pos_end,
-             repr = function(self) return "("..self.type..")" end
+             repr = function(self) return "null" end
     }
 end
 local function parse(tokens)
@@ -335,12 +341,7 @@ function Value()
     return { tonum = function(self) return nil end, tostr = function(self) return nil end,
              repr = function(self)
                  local str = "("
-                 if self.type then
-                     str = str..self.type
-                     if self.value then
-                         str = str..": "..tostring(self.value)
-                     end
-                 end
+                 if self.value then str = str..self.value else str=str..self.type end
                  return str..")"
              end,
              add = function(self, other, RETURN)
