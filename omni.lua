@@ -63,7 +63,7 @@ string.join = function(s, t)
     local str = ""
     local i = 1
     for k, v in pairs(t) do
-        if i == #t then str=str..v else str=str..v..s end
+        if i == #t then str=str..tostring(v) else str=str..tostring(v)..s end
         i = i + 1
     end
     return str
@@ -197,9 +197,14 @@ local function lex(fn, text)
     return tokens
 end
 ---Parser
-function ValAssignNode(name_tok, expr)
-    return { type = "varAssignNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
+function ValCreateNode(name_tok, expr)
+    return { type = "valCreateNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
              repr = function(self) return "( val "..tostring(self.name_tok).." "..tostring(self.expr).." )" end
+    }
+end
+function ConstCreateNode(name_tok, expr)
+    return { type = "constCreateNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
+             repr = function(self) return "( const "..tostring(self.name_tok).." "..tostring(self.expr).." )" end
     }
 end
 function BinOpNode(left, op_tok, right)
@@ -232,6 +237,11 @@ function NullNode(null_tok)
              repr = function(self) return "null" end
     }
 end
+function NameNode(name_tok)
+    return { type = "nameNode", name_tok = name_tok, pos_start = name_tok.pos_start, pos_end = name_tok.pos_end,
+             repr = function(self) return tostring(self.name_tok) end
+    }
+end
 local function parse(tokens)
     local tok
     local tok_idx = 0
@@ -245,18 +255,7 @@ local function parse(tokens)
         update_tok()
     end
     advance()
-    local bin_op
-    local atom
-    local index
-    local call
-    local power
-    local factor
-    local term
-    local arith_expr
-    local comp_expr
-    local expr
-    local statement
-    local statements
+    local bin_op, atom, index, call, power, factor, term, arith_expr, comp_expr, expr, statement, statements
     bin_op =  function (func1, ops, func2)
         if not func2 then func2 = func1 end
         local left, err = func1() if err then return nil, err end
@@ -272,6 +271,10 @@ local function parse(tokens)
     end
     atom = function()
         local tok_ = tok
+        if tok.type == T.name then
+            advance()
+            return NameNode(tok_)
+        end
         if tok.type == T.num then
             advance()
             return NumberNode(tok_)
@@ -476,6 +479,23 @@ function List(list)
     class.value = list
     return class
 end
+function Context(variables)
+    return { vars = variables,
+             get = function(self, name_tok)
+                 return self.vars[name_tok.value].value, self
+             end,
+             create = function(self, kw, name_tok, init_value)
+                 if self.vars[name_tok.value] then return nil, self, "ERROR: variable is already created" end
+                 if init_value then self.vars[name_tok.value] = { value = init_value, type = kw } else self.vars[name_tok.value] = { value = Null(), type = kw } end
+                 return self.vars[name_tok.value].value, self
+             end,
+             set = function(self, name_tok, value)
+                 if self.vars[name_tok.value].kw == "const" then return nil, self, "ERROR: cannot alter value of a constant variable" end
+                 self.vars[name_tok.value].value = value
+                 return self.vars[name_tok.value].value, self
+             end
+    }
+end
 local function interpret(ast, global_context)
     local visit = {
         binOpNode = function(self, node, context)
@@ -484,49 +504,62 @@ local function interpret(ast, global_context)
             local right
             local value
             local err
-            left, err = self[node.left.type](self, node.left, context) if err then return nil, err end
-            right, err = self[node.right.type](self, node.right, context) if err then return nil, err end
+            left, context, err = self[node.left.type](self, node.left, context) if err then return nil, context, err end
+            right, context, err = self[node.right.type](self, node.right, context) if err then return nil, context, err end
             if op_tok.type == T.plus then if left.add then
-                value, err = left.add(left, right) if err then return nil, err end
-            else return nil, "ERROR: cannot add "..tostring(left.type) end end
+                value, err = left.add(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot add "..tostring(left.type) end end
             if op_tok.type == T.minus then if left.sub then
-                value, err = left.sub(left, right) if err then return nil, err end
-            else return nil, "ERROR: cannot subtract "..tostring(left.type) end end
+                value, err = left.sub(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot subtract "..tostring(left.type) end end
             if op_tok.type == T.mul then if left.mul then
-                value, err = left.mul(left, right) if err then return nil, err end
-            else return nil, "ERROR: cannot multiply "..tostring(left.type) end end
+                value, err = left.mul(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot multiply "..tostring(left.type) end end
             if op_tok.type == T.div then if left.div then
-                value, err = left.div(left, right) if err then return nil, err end
-            else return nil, "ERROR: cannot divide "..tostring(left.type) end end
+                value, err = left.div(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot divide "..tostring(left.type) end end
             if op_tok.type == T.divint then if left.divint then
-                value, err = left.divint(left, right) if err then return nil, err end
-            else return nil, "ERROR: cannot integer-divide "..tostring(left.type) end end
-            if value then return value
-            else return nil, "ERROR: "..op_tok.type.." is not a valid binary operator" end
+                value, err = left.divint(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot integer-divide "..tostring(left.type) end end
+            if value then return value, context
+            else return nil, context, "ERROR: "..op_tok.type.." is not a valid binary operator" end
         end,
         unaryOpNode = function(self, node, context)
-            local value, err = self[node.node.type](self, node.node, context) if err then return nil, err end
-            return Number(-value.value)
+            local value
+            local err
+            value, context, err = self[node.node.type](self, node.node, context) if err then return nil, context, err end
+            return Number(-value.value), context
         end,
-        numberNode = function(self, node, context)
-            return Number(node.number_tok.value)
+        numberNode = function(self, node, context) return Number(node.number_tok.value), context end,
+        boolNode = function(self, node, context) return Bool(node.bool_tok.value), context end,
+        stringNode = function(self, node, context) return String(node.string_tok.value), context end,
+        nullNode = function(self, node, context) return Null(), context end,
+        nameNode = function(self, node, context)
+            local value, err
+            value, context, err = context.get(context, node.name_tok) if err then return nil, context, err end
+            return value, context
         end,
-        boolNode = function(self, node, context)
-            return Bool(node.bool_tok.value)
+        valCreateNode = function(self, node, context)
+            local value
+            local err
+            if node.expr then value, context, err = self[node.expr.type](self, node.expr, context) if err then return nil, context, err end end
+            value, context, err = context.create(context, "val", node.name_tok, value) if err then return nil, context, err end
         end,
-        stringNode = function(self, node, context)
-            return String(node.string_tok.value)
-        end,
-        nullNode = function() return Null() end
     }
-    local value, err = visit[ast.type](visit, ast, global_context)
-    return value, err
+    local value
+    local err
+    value, global_context, err = visit[ast.type](visit, ast, global_context)
+    return value, global_context, err
 end
 ---Execution
 local fn
 local text
 if arg[1] then text = string.join("\n", lines_from(arg[1])); fn = arg[1] else text = string.join("\n", lines_from(arg[0]:sub(1, #arg[0]-8).."test.o")); fn = "test.o" end
 local tokens = lex(fn, text) if tokens[1].type == T.eof then return end
+print(string.join("-", tokens))
 local ast, err = parse(tokens) if err then print(err) return end
 print(ast)
-local value; value, err = interpret(ast, {}) if err then print(err) else if value then if value.str then print(value.str(value)) end end end
+local value, global_context = nil, Context({
+    pi = { value = Number(math.pi), kw = "const" },
+})
+value, global_context, err = interpret(ast, global_context) if err then print(err) else if value then if value.str then print(value.str(value)) end end end
