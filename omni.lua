@@ -584,7 +584,7 @@ end
 function Context(variables)
     return { vars = variables,
              get = function(self, name_tok)
-                 if not self.vars[name_tok.value] then return nil, self, "ERROR: name not defined" end
+                 if not self.vars[name_tok.value] then return Null(), self end
                  return self.vars[name_tok.value].value, self
              end,
              create = function(self, kw, name_tok, init_value)
