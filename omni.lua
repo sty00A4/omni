@@ -349,7 +349,7 @@ local function parse(tokens)
         return statement_, err
     end
     local ast, err = statements() if err then return nil, err end
-    if tokens[tok_idx].type == T.eof then return ast else return nil, "ERROR: invalid syntax" end
+    if tokens[tok_idx].type == T.eof then return ast else return nil, "ERROR: no use for expression" end
 end
 ---Interpreter
 function Value()
@@ -584,6 +584,7 @@ end
 function Context(variables)
     return { vars = variables,
              get = function(self, name_tok)
+                 if not self.vars[name_tok.value] then return nil, self, "ERROR: name not defined" end
                  return self.vars[name_tok.value].value, self
              end,
              create = function(self, kw, name_tok, init_value)
