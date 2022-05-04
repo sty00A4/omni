@@ -44,18 +44,29 @@ table.contains = function(t, v)
     return false
 end
 table.equal = function(t1, t2)
+    local equal = true
     for k, v in pairs(t1) do
-        if table.contains(t2, v) and table.containsKey(t2, k) then
-            return true
+        if not (table.contains(t2, v) and table.containsKey(t2, k)) then
+            equal = false
         end
     end
-    return false
+    return equal
 end
 table.keyOfValue = function(t, v)
     for k, val in pairs(t) do
         if val == v then return k end
     end
     return nil
+end
+table.sub = function(t, i, j)
+    if not j then j = #t end
+    local st = {}
+    for idx, v in ipairs(t) do
+        if idx >= i and idx <= j then
+            table.insert(st, v)
+        end
+    end
+    return st
 end
 local function file_exists(file) local f = io.open(file, "rb"); if f then f:close() end return f ~= nil end
 local function lines_from(file) if not file_exists(file) then return error("file doesn't exist", 2) end local lines = {} for line in io.lines(file) do lines[#lines + 1] = line end return lines end
@@ -67,6 +78,16 @@ string.join = function(s, t)
         i = i + 1
     end
     return str
+end
+string.split = function(s, sep)
+    local t = {}
+    local temp = ""
+    for _, c in pairs(totable(s)) do
+        if c == sep then if #temp > 0 then table.insert(t, temp) temp = "" end
+        else temp = temp .. c end
+    end
+    if #temp > 0 then table.insert(t, temp) temp = "" end
+    return t
 end
 local function join(...) local str = "" for _, v in ipairs(arg) do str = str .. tostring(arg) end return str end
 ---Grammar
@@ -97,9 +118,24 @@ local CHARS = { "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
 local NUMBERS = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" }
 local STRDEF = '"'
 local COMMENT = "#"
+---Errors
+local function Error(type, details, pos_start, pos_end)
+    return { type = type, details = details, pos_start = pos_start, pos_end = pos_end,
+             repr = function(self, text)
+                 local str = self.type..": "..self.details
+                 if self.pos_start and self.pos_end then
+                     if text then str = string.join("\n", table.sub(string.split(text, "\n"), self.pos_start.ln, self.pos_end.ln)).."\n"..str end
+                     str = "in \""..self.pos_start.fn .. "\"\n" .. str
+                     str = str.." ("..self.pos_start.ln..":"..self.pos_start.col.." to "..self.pos_end.ln..":"..self.pos_end.col..")"
+                 end
+                 return str
+             end,
+    }
+end
 ---Lexer
 local function Position(idx, ln, col, fn, ftext)
     return { idx = idx, ln = ln, col = col, fn = fn, ftext = ftext,
+             copy = function(self) return Position(self.idx, self.ln, self.col, self.fn, self.ftext) end,
              next = function(self, char)
                  self.idx = self.idx + 1
                  self.col = self.col + 1
@@ -125,10 +161,15 @@ local function Token(type, value, pos_start, pos_end)
     }
 end
 local function lex(fn, text)
-    local pos = Position(0, 0, 0, fn, text)
+    local pos = Position(0, 1, 0, fn, text)
     local char = " "
     local function advance()
-        pos = pos.next(pos, char)
+        pos.idx = pos.idx + 1
+        pos.col = pos.col + 1
+        if char == "\n" then
+            pos.ln = pos.ln + 1
+            pos.col = 0
+        end
         if pos.idx < #text + 1 then
             char = text:sub(pos.idx, pos.idx)
         else
@@ -143,39 +184,39 @@ local function lex(fn, text)
             advance()
             if char then
                 if table.containsKey(S, s..char) then
-                    table.insert(tokens, Token(S[s..char], nil, pos, pos))
+                    table.insert(tokens, Token(S[s..char], nil, pos.copy(pos), pos.copy(pos)))
                     advance()
-                else table.insert(tokens, Token(S[s], nil, pos, pos)) end
-            else table.insert(tokens, Token(S[s], nil, pos, pos)) end
+                else table.insert(tokens, Token(S[s], nil, pos.copy(pos), pos.copy(pos))) end
+            else table.insert(tokens, Token(S[s], nil, pos.copy(pos), pos.copy(pos))) end
         elseif table.contains(CHARS, char) then
-            local start = pos
+            local start = pos.copy(pos)
             local name = ""
             while table.contains(CHARS, char) or table.contains(NUMBERS, char) do
                 name = name..char
                 advance()
             end
             if table.contains(K, name) then
-                table.insert(tokens, Token(T.keyword, name, start, pos))
+                table.insert(tokens, Token(T.keyword, name, start.copy(start), pos.copy(pos)))
             elseif name == "true" or name == "false" then
-                table.insert(tokens, Token(T.bool, (name == "true"), start, pos))
+                table.insert(tokens, Token(T.bool, name == "true", start.copy(start), pos.copy(pos)))
             elseif name == "null" then
-                table.insert(tokens, Token(T.null, nil, start, pos))
+                table.insert(tokens, Token(T.null, nil, start.copy(start), pos.copy(pos)))
             else
-                table.insert(tokens, Token(T.name, name, start, pos))
+                table.insert(tokens, Token(T.name, name, start.copy(start), pos.copy(pos)))
             end
         elseif table.contains(NUMBERS, char) then
-            local start = pos
+            local start = pos.copy(pos)
             local number = ""
             while table.contains(NUMBERS, char) or char == "." do
                 number = number..char
                 advance()
             end
-            table.insert(tokens, Token(T.num, tonumber(number), start, pos))
+            table.insert(tokens, Token(T.num, tonumber(number), start.copy(start), pos.copy(pos)))
         elseif char == STRDEF then
-            local start = pos
+            local start = pos.copy(pos)
             advance()
             if char == '"' then
-                table.insert(tokens, Token(T.str, "", start, pos))
+                table.insert(tokens, Token(T.str, "", start.copy(start), pos.copy(pos)))
                 advance()
             else
                 local str = char
@@ -184,7 +225,7 @@ local function lex(fn, text)
                     str = str .. char
                     advance()
                 end
-                table.insert(tokens, Token(T.str, str, start, pos))
+                table.insert(tokens, Token(T.str, str, start.copy(start), pos.copy(pos)))
                 advance()
             end
         elseif char == COMMENT then
@@ -193,7 +234,7 @@ local function lex(fn, text)
             advance()
         end
     end
-    table.insert(tokens, Token(T.eof, nil, pos, pos))
+    table.insert(tokens, Token(T.eof, nil, pos.copy(pos), pos.copy(pos)))
     return tokens
 end
 ---Parser
@@ -297,7 +338,7 @@ local function parse(tokens)
             advance()
             return node
         end
-        return nil, 'ERROR: expected number, bool, string, "("'
+        return nil, Error("invalid syntax", 'expected number, bool, string, "("', tok.pos_start, tok.pos_end)
     end
     index = function()
         local node, err = bin_op(atom, { T.index }, index) if err then return nil, err end
@@ -349,16 +390,17 @@ local function parse(tokens)
         return statement_, err
     end
     local ast, err = statements() if err then return nil, err end
-    if tokens[tok_idx].type == T.eof then return ast else return nil, "ERROR: no use for expression" end
+    if tokens[tok_idx].type == T.eof then return ast else return nil, Error("run-time error", "no use for expression", tokens[tok_idx].pos_start, tokens[tok_idx].pos_end) end
 end
 ---Interpreter
 function Value()
     return { tonum = function(self) return nil end, tostr = function(self) return nil end, tobool = function(self) return nil end,
              repr = function(self)
                  local str = "("
-                 if self.value then str = str..self.value else str=str..self.type end
+                 if self.value then str = str..tostring(self.value) else str=str..self.type end
                  return str..")"
              end,
+             setPos = function(self, pos_start, pos_end) self.pos_start, self.pos_end = pos_start, pos_end return self end,
              add = function(self, other, RETURN)
                  if self.type == "number" then
                      local left = self
@@ -366,7 +408,7 @@ function Value()
                      if other.tonum then
                          right = other.tonum(other)
                          if right then return Number(left.value + right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  elseif self.type == "string" then
                      local left = self
@@ -374,10 +416,10 @@ function Value()
                      if other.tostr then
                          right = other.tostr(other)
                          if right then return String(left.value .. right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to string" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to string", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot do add with "..other.type.." and "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do add with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.add(other, self, true)
                  return value, err
              end,
@@ -388,10 +430,10 @@ function Value()
                      if other.tonum then
                          right = other.tonum(other)
                          if right then return Number(left.value - right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot do subtract with "..other.type.." and "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do subtract with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.sub(other, self, true)
                  return value, err
              end,
@@ -402,10 +444,10 @@ function Value()
                      if other.tonum then
                          right = other.tonum(other)
                          if right then return Number(left.value * right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot do multiply with "..other.type.." and "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do multiply with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.sub(other, self, true)
                  return value, err
              end,
@@ -421,10 +463,10 @@ function Value()
                              else
                                  return Number(left.value / right.value), nil
                              end
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot do divide with "..other.type.." and "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do divide with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.div(other, self, true)
                  return value, err
              end,
@@ -435,10 +477,10 @@ function Value()
                      if other.tonum then
                          right = other.tonum(other)
                          if right then return Number(left.value // right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot do integer-divide with "..other.type.." and "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do integer-divide with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.divint(other, self, true)
                  return value, err
              end,
@@ -449,10 +491,10 @@ function Value()
                      if other.tobool then
                          right = other.tobool(other)
                          if right then return Bool(left.value and right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to bool" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to bool", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot do and-comp with "..other.type.." and "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do and-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.and_(other, self, true)
                  return value, err
              end,
@@ -463,10 +505,10 @@ function Value()
                      if other.tobool then
                          right = other.tobool(other)
                          if right then return Bool(left.value or right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to bool" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to bool", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot do or-comp with "..other.type.." and "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do or-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.and_(other, self, true)
                  return value, err
              end,
@@ -479,10 +521,10 @@ function Value()
                      if other.tonum then
                          right = other.tonum(other)
                          if right then return Bool(left.value < right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot less-than-comp "..other.type.." with "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do less-than-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.lt(other, self, true)
                  return value, err
              end,
@@ -493,10 +535,10 @@ function Value()
                      if other.tonum then
                          right = other.tonum(other)
                          if right then return Bool(left.value > right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot greater-than-comp "..other.type.." with "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do greater-than-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.gt(other, self, true)
                  return value, err
              end,
@@ -507,10 +549,10 @@ function Value()
                      if other.tonum then
                          right = other.tonum(other)
                          if right then return Bool(left.value <= right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot less-than-equal-comp "..other.type.." with "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do less-than-equal with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.lte(other, self, true)
                  return value, err
              end,
@@ -521,10 +563,10 @@ function Value()
                      if other.tonum then
                          right = other.tonum(other)
                          if right then return Bool(left.value >= right.value), nil
-                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot greater-than-equal-comp "..other.type.." with "..self.type end
+                 if RETURN then return nil, Error("operation error", "cannot do greater-than-equal with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
                  local value, err = other.gte(other, self, true)
                  return value, err
              end,
@@ -588,12 +630,12 @@ function Context(variables)
                  return self.vars[name_tok.value].value, self
              end,
              create = function(self, kw, name_tok, init_value)
-                 if self.vars[name_tok.value] then return nil, self, "ERROR: variable is already created" end
+                 if self.vars[name_tok.value] then return nil, self, Error("name error", "variable is already created", name_tok.pos_start, name_tok.pos_end) end
                  if init_value then self.vars[name_tok.value] = { value = init_value, type = kw } else self.vars[name_tok.value] = { value = Null(), type = kw } end
                  return self.vars[name_tok.value].value, self
              end,
              set = function(self, name_tok, value)
-                 if self.vars[name_tok.value].kw == "const" then return nil, self, "ERROR: cannot alter value of a constant variable" end
+                 if self.vars[name_tok.value].kw == "const" then return nil, self, Error("name error", "cannot alter value of a constant variable", name_tok.pos_start, name_tok.pos_end) end
                  self.vars[name_tok.value].value = value
                  return self.vars[name_tok.value].value, self
              end
@@ -611,45 +653,45 @@ local function interpret(ast, global_context)
             right, context, err = self[node.right.type](self, node.right, context) if err then return nil, context, err end
             if op_tok.type == T.plus then if left.add then
                 value, err = left.add(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do add on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do add on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.minus then if left.sub then
                 value, err = left.sub(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do subtract on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do subtract "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.mul then if left.mul then
                 value, err = left.mul(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do multiply on"..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do multiply "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.div then if left.div then
                 value, err = left.div(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do divide on"..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do divide "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.divint then if left.divint then
                 value, err = left.divint(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do integer-divide on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do integer-divide "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.or_ then if left.or_ then
                 value, err = left.or_(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do or-comp on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do or-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.and_ then if left.and_ then
                 value, err = left.and_(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do and-comp on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do and-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.ee then if left.ee then
                 value, err = left.ee(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do equal-comp on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do equal-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.ne then if left.ne then
                 value, err = left.ne(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do not-equal-comp on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do not-equal-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.lt then if left.lt then
                 value, err = left.lt(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do less-than-comp on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do less-than-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.gt then if left.gt then
                 value, err = left.gt(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do greater-than-comp on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do greater-than-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.lte then if left.lte then
                 value, err = left.lte(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do less-than-equal-comp on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do less-than-equal-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.gte then if left.gte then
                 value, err = left.gte(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot do greater-than-equal-comp on "..tostring(left.type) end end
+            else return nil, context, Error("operation error", "cannot do greater-than-equal-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if value then return value, context
-            else return nil, context, "ERROR: "..op_tok.type.." is not a valid binary operator" end
+            else return nil, context, Error("operation error", op_tok.type.." is not a valid binary operator", op_tok.pos_start, op_tok.pos_end) end
         end,
         unaryOpNode = function(self, node, context)
             local value
@@ -660,13 +702,13 @@ local function interpret(ast, global_context)
             elseif node.op_tok.type == T.not_ then
                 return Bool(not value.value), context
             else
-                return nil, context, "ERROR: invalid unary operation tok of type "..node.op_tok.type
+                return nil, context, Error("operation error", "invalid unary operation tok of type "..node.op_tok.type, node.op_tok.pos_start, node.op_tok.pos_end)
             end
         end,
-        numberNode = function(self, node, context) return Number(node.number_tok.value), context end,
-        boolNode = function(self, node, context) return Bool(node.bool_tok.value), context end,
-        stringNode = function(self, node, context) return String(node.string_tok.value), context end,
-        nullNode = function(self, node, context) return Null(), context end,
+        numberNode = function(self, node, context) local value = Number(node.number_tok.value) return value.setPos(value, node.number_tok.pos_start, node.number_tok.pos_end), context end,
+        boolNode = function(self, node, context) local value = Bool(node.bool_tok.value) return value.setPos(value, node.bool_tok.pos_start, node.bool_tok.pos_end), context end,
+        stringNode = function(self, node, context) local value = String(node.string_tok.value) return value.setPos(value, node.string_tok.pos_start, node.string_tok.pos_end), context end,
+        nullNode = function(self, node, context) local value = Null() return value.setPos(value, node.null_tok.pos_start, node.null_tok.pos_end), context end,
         nameNode = function(self, node, context)
             local value, err
             value, context, err = context.get(context, node.name_tok) if err then return nil, context, err end
@@ -689,10 +731,11 @@ local fn
 local text
 if arg[1] then text = string.join("\n", lines_from(arg[1])); fn = arg[1] else text = string.join("\n", lines_from(arg[0]:sub(1, #arg[0]-8).."test.o")); fn = "test.o" end
 local tokens = lex(fn, text) if tokens[1].type == T.eof then return end
-print(string.join("-", tokens))
+--print(string.join("-", tokens))
 local ast, err = parse(tokens) if err then print(err) return end
-print(ast)
+--print(ast)
 local value, global_context = nil, Context({
     pi = { value = Number(math.pi), kw = "const" },
 })
-value, global_context, err = interpret(ast, global_context) if err then print(err) else if value then if value.str then print(value.str(value)) end end end
+value, global_context, err = interpret(ast, global_context)
+if err then print(err.repr(err, text)) else if value then if value.str then print(value.str(value)) end end end
