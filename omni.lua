@@ -293,20 +293,20 @@ local function parse(tokens)
         end
         if tok.type == T.evalin then
             advance()
-            local node, err = expr()
+            local node, err = expr() if err then return nil, err end
             advance()
-            return node, err
+            return node
         end
         return nil, 'ERROR: expected number, bool, string, "("'
     end
     index = function()
-        local node, err = bin_op(atom, { T.index }, index)
-        return node, err
+        local node, err = bin_op(atom, { T.index }, index) if err then return nil, err end
+        return node
     end
     call = function()  end
     power = function()
-        local node, err = bin_op(index, { T.pow, T.mod }, factor)
-        return node, err
+        local node, err = bin_op(index, { T.pow, T.mod }, factor) if err then return nil, err end
+        return node
     end
     factor = function()
         local op = tok
@@ -315,18 +315,30 @@ local function parse(tokens)
             local node, err = factor() if err then return nil, err end
             return UnaryOpNode(op, node)
         end
-        local node, err = power()
-        return node, err
+        local node, err = power() if err then return nil, err end
+        return node
     end
     term = function()
-        local node, err = bin_op(factor, { T.mul, T.div, T.divint}, term)
-        return node, err
+        local node, err = bin_op(factor, { T.mul, T.div, T.divint}, term) if err then return nil, err end
+        return node
     end
-    arith_expr = function()  end
-    comp_expr = function()  end
+    arith_expr = function()
+        local node, err = bin_op(term, { T.plus, T.minus }, arith_expr) if err then return nil, err end
+        return node
+    end
+    comp_expr = function()
+        if tok.matches(tok, Token(T.not_)) then
+            local op_tok = tok
+            advance()
+            local node, err = comp_expr() if err then return nil, err end
+            return UnaryOpNode(op_tok, node)
+        end
+        local node, err = bin_op(arith_expr, { T.ee, T.ne, T.lt, T.gt, T.lte, T.gte }, comp_expr) if err then return nil, err end
+        return node
+    end
     expr = function()
-        local node, err = bin_op(term, { T.plus, T.minus }, expr)
-        return node, err
+        local node, err = bin_op(comp_expr, { T.and_, T.or_ }, expr) if err then return nil, err end
+        return node
     end
     statement = function()
         local node, err = expr() if err then return nil, err end
@@ -337,11 +349,11 @@ local function parse(tokens)
         return statement_, err
     end
     local ast, err = statements() if err then return nil, err end
-    return ast, nil
+    if tokens[tok_idx].type == T.eof then return ast else return nil, "ERROR: invalid syntax" end
 end
 ---Interpreter
 function Value()
-    return { tonum = function(self) return nil end, tostr = function(self) return nil end,
+    return { tonum = function(self) return nil end, tostr = function(self) return nil end, tobool = function(self) return nil end,
              repr = function(self)
                  local str = "("
                  if self.value then str = str..self.value else str=str..self.type end
@@ -365,7 +377,7 @@ function Value()
                          else return nil, "ERROR: cannot cast "..other.type.." to string" end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot add "..other.type.." with "..self.type end
+                 if RETURN then return nil, "ERROR: cannot do add with "..other.type.." and "..self.type end
                  local value, err = other.add(other, self, true)
                  return value, err
              end,
@@ -379,7 +391,7 @@ function Value()
                          else return nil, "ERROR: cannot cast "..other.type.." to number" end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot subtract "..other.type.." with "..self.type end
+                 if RETURN then return nil, "ERROR: cannot do subtract with "..other.type.." and "..self.type end
                  local value, err = other.sub(other, self, true)
                  return value, err
              end,
@@ -393,7 +405,7 @@ function Value()
                          else return nil, "ERROR: cannot cast "..other.type.." to number" end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot multiply "..other.type.." with "..self.type end
+                 if RETURN then return nil, "ERROR: cannot do multiply with "..other.type.." and "..self.type end
                  local value, err = other.sub(other, self, true)
                  return value, err
              end,
@@ -412,7 +424,7 @@ function Value()
                          else return nil, "ERROR: cannot cast "..other.type.." to number" end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot div "..other.type.." with "..self.type end
+                 if RETURN then return nil, "ERROR: cannot do divide with "..other.type.." and "..self.type end
                  local value, err = other.div(other, self, true)
                  return value, err
              end,
@@ -426,8 +438,94 @@ function Value()
                          else return nil, "ERROR: cannot cast "..other.type.." to number" end
                      end
                  end
-                 if RETURN then return nil, "ERROR: cannot div "..other.type.." with "..self.type end
+                 if RETURN then return nil, "ERROR: cannot do integer-divide with "..other.type.." and "..self.type end
                  local value, err = other.divint(other, self, true)
+                 return value, err
+             end,
+             and_ = function(self, other, RETURN)
+                 if self.type == "bool" then
+                     local left = self
+                     local right
+                     if other.tobool then
+                         right = other.tobool(other)
+                         if right then return Bool(left.value and right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to bool" end
+                     end
+                 end
+                 if RETURN then return nil, "ERROR: cannot do and-comp with "..other.type.." and "..self.type end
+                 local value, err = other.and_(other, self, true)
+                 return value, err
+             end,
+             or_ = function(self, other, RETURN)
+                 if self.type == "bool" then
+                     local left = self
+                     local right
+                     if other.tobool then
+                         right = other.tobool(other)
+                         if right then return Bool(left.value or right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to bool" end
+                     end
+                 end
+                 if RETURN then return nil, "ERROR: cannot do or-comp with "..other.type.." and "..self.type end
+                 local value, err = other.and_(other, self, true)
+                 return value, err
+             end,
+             ee = function(self, other) return Bool(self.value == other.value) end,
+             ne = function(self, other) return Bool(self.value ~= other.value) end,
+             lt = function(self, other, RETURN)
+                 if self.type == "number" then
+                     local left = self
+                     local right
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then return Bool(left.value < right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
+                 end
+                 if RETURN then return nil, "ERROR: cannot less-than-comp "..other.type.." with "..self.type end
+                 local value, err = other.lt(other, self, true)
+                 return value, err
+             end,
+             gt = function(self, other, RETURN)
+                 if self.type == "number" then
+                     local left = self
+                     local right
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then return Bool(left.value > right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
+                 end
+                 if RETURN then return nil, "ERROR: cannot greater-than-comp "..other.type.." with "..self.type end
+                 local value, err = other.gt(other, self, true)
+                 return value, err
+             end,
+             lte = function(self, other, RETURN)
+                 if self.type == "number" then
+                     local left = self
+                     local right
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then return Bool(left.value <= right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
+                 end
+                 if RETURN then return nil, "ERROR: cannot less-than-equal-comp "..other.type.." with "..self.type end
+                 local value, err = other.lte(other, self, true)
+                 return value, err
+             end,
+             gte = function(self, other, RETURN)
+                 if self.type == "number" then
+                     local left = self
+                     local right
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then return Bool(left.value >= right.value), nil
+                         else return nil, "ERROR: cannot cast "..other.type.." to number" end
+                     end
+                 end
+                 if RETURN then return nil, "ERROR: cannot greater-than-equal-comp "..other.type.." with "..self.type end
+                 local value, err = other.gte(other, self, true)
                  return value, err
              end,
     }
@@ -438,6 +536,7 @@ function Number(number)
     class.type = "number"
     class.tonum = function(self) return self end
     class.tostr = function(self) return String(tostring(self.value)) end
+    class.tobool = function(self) return Bool(self.value ~= 0) end
     class.str = function(self) return tostring(self.value) end
     if math.floor(number) == number then class.value = math.floor(number) else class.value = number end
     return class
@@ -447,6 +546,7 @@ function Bool(bool)
     class.type = "bool"
     class.tonum = function(self) if self.value then return Number(1) else return Number(0) end end
     class.tostr = function(self) return String(tostring(self.value)) end
+    class.tobool = function(self) return self end
     class.str = function(self) return tostring(self.value) end
     if bool then class.value = true else class.value = false end
     return class
@@ -456,6 +556,7 @@ function Null()
     class.type = "null"
     class.tonum = function(self) return Number(0) end
     class.tostr = function(self) return String("null") end
+    class.tobool = function(self) return Bool(false) end
     class.str = function(self) return "null" end
     return class
 end
@@ -469,6 +570,7 @@ function String(str)
         return Number(tonumber(self.value))
     end
     class.tostr = function(self) return String(tostring(self.value)) end
+    class.tobool = function(self) return Bool(#tostring(self.value) > 0) end
     class.value = tostring(str)
     class.str = function(self) return self.value end
     return class
@@ -508,19 +610,43 @@ local function interpret(ast, global_context)
             right, context, err = self[node.right.type](self, node.right, context) if err then return nil, context, err end
             if op_tok.type == T.plus then if left.add then
                 value, err = left.add(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot add "..tostring(left.type) end end
+            else return nil, context, "ERROR: cannot do add on "..tostring(left.type) end end
             if op_tok.type == T.minus then if left.sub then
                 value, err = left.sub(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot subtract "..tostring(left.type) end end
+            else return nil, context, "ERROR: cannot do subtract on "..tostring(left.type) end end
             if op_tok.type == T.mul then if left.mul then
                 value, err = left.mul(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot multiply "..tostring(left.type) end end
+            else return nil, context, "ERROR: cannot do multiply on"..tostring(left.type) end end
             if op_tok.type == T.div then if left.div then
                 value, err = left.div(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot divide "..tostring(left.type) end end
+            else return nil, context, "ERROR: cannot do divide on"..tostring(left.type) end end
             if op_tok.type == T.divint then if left.divint then
                 value, err = left.divint(left, right) if err then return nil, context, err end
-            else return nil, context, "ERROR: cannot integer-divide "..tostring(left.type) end end
+            else return nil, context, "ERROR: cannot do integer-divide on "..tostring(left.type) end end
+            if op_tok.type == T.or_ then if left.or_ then
+                value, err = left.or_(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot do or-comp on "..tostring(left.type) end end
+            if op_tok.type == T.and_ then if left.and_ then
+                value, err = left.and_(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot do and-comp on "..tostring(left.type) end end
+            if op_tok.type == T.ee then if left.ee then
+                value, err = left.ee(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot do equal-comp on "..tostring(left.type) end end
+            if op_tok.type == T.ne then if left.ne then
+                value, err = left.ne(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot do not-equal-comp on "..tostring(left.type) end end
+            if op_tok.type == T.lt then if left.lt then
+                value, err = left.lt(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot do less-than-comp on "..tostring(left.type) end end
+            if op_tok.type == T.gt then if left.gt then
+                value, err = left.gt(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot do greater-than-comp on "..tostring(left.type) end end
+            if op_tok.type == T.lte then if left.lte then
+                value, err = left.lte(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot do less-than-equal-comp on "..tostring(left.type) end end
+            if op_tok.type == T.gte then if left.gte then
+                value, err = left.gte(left, right) if err then return nil, context, err end
+            else return nil, context, "ERROR: cannot do greater-than-equal-comp on "..tostring(left.type) end end
             if value then return value, context
             else return nil, context, "ERROR: "..op_tok.type.." is not a valid binary operator" end
         end,
@@ -528,7 +654,13 @@ local function interpret(ast, global_context)
             local value
             local err
             value, context, err = self[node.node.type](self, node.node, context) if err then return nil, context, err end
-            return Number(-value.value), context
+            if node.op_tok.type == T.minus then
+                return Number(-value.value), context
+            elseif node.op_tok.type == T.not_ then
+                return Bool(not value.value), context
+            else
+                return nil, context, "ERROR: invalid unary operation tok of type "..node.op_tok.type
+            end
         end,
         numberNode = function(self, node, context) return Number(node.number_tok.value), context end,
         boolNode = function(self, node, context) return Bool(node.bool_tok.value), context end,
