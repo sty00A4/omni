@@ -100,13 +100,13 @@ local function join(...) local str = "" for _, v in ipairs(arg) do str = str .. 
 local T = {
     num = "number", str = "string", null = "null", bool = "bool", name = "name",
     keyword = "keyword", plus = "plus", minus = "minus", mul = "mul", div = "div", divint = "divint", pow = "pow", index = "index", mod = "mod",
-    eq = "eq", rep = "rep", sep = "sep", nl = "nl", eof = "eof",
+    eq = "eq", rep = "rep", sep = "sep", nl = "nl", eof = "eof", safe = "safe",
     evalin = "evalin", evalout = "evalout", listin = "listin", listout = "listout", tablein = "tablein", tableout = "tableout",
     not_ = "not", ee = "ee", ne = "ne", lt = "lt", gt = "gt", lte = "lte", gte = "gte",
     and_ = "and", or_ = "or",
 }
 local S = {
-    [";"] = T.nl, ["\n"] = T.nl, ["="] = T.eq, [":"] = T.rep, [","] = T.sep,
+    [";"] = T.nl, ["\n"] = T.nl, ["="] = T.eq, [":"] = T.rep, [","] = T.sep, ["?"] = T.safe,
     ["("] = T.evalin, [")"] = T.evalout, ["["] = T.listin, ["]"] = T.listout, ["{"] = T.tablein, ["}"] = T.tableout,
     ["+"] = T.plus, ["-"] = T.minus, ["*"] = T.mul, ["**"] = T.pow, ["/"] = T.div, ["//"] = T.divint, ["."] = T.index, ["%"] = T.mod,
     ["!"] = T.not_, ["=="] = T.ee, ["!="] = T.ne, ["<"] = T.lt, [">"] = T.gt, ["<="] = T.lte, [">="] = T.gte,
@@ -414,7 +414,7 @@ local function parse(tokens)
         return node
     end
     comp_expr = function()
-        if tok.matches(tok, Token(T.not_)) then
+        if tok.matches(tok, Token(T.not_)) or tok.matches(tok, Token(T.safe)) then
             local op_tok = tok
             advance()
             local node, err = comp_expr() if err then return nil, err end
@@ -705,7 +705,7 @@ end
 function Context(variables)
     return { vars = variables,
              get = function(self, name_tok)
-                 if not self.vars[name_tok.value] then return Null(), self end
+                 if not self.vars[name_tok.value] then return nil, self, Error("undefined error", "name is not defined", name_tok.pos_start, name_tok.pos_end) end
                  return self.vars[name_tok.value].value, self
              end,
              create = function(self, kw, name_tok, init_value)
@@ -778,14 +778,22 @@ local function interpret(ast, global_context)
         unaryOpNode = function(self, node, context)
             local value
             local err
-            value, context, err = self[node.node.type](self, node.node, context) if err then return nil, context, err end
             if node.op_tok.type == T.minus then
+                value, context, err = self[node.node.type](self, node.node, context) if err then return nil, context, err end
                 return Number(-value.value), context
-            elseif node.op_tok.type == T.not_ then
-                return Bool(not value.value), context
-            else
-                return nil, context, Error("operation error", "invalid unary operation tok of type "..node.op_tok.type, node.op_tok.pos_start, node.op_tok.pos_end)
             end
+            if node.op_tok.type == T.not_ then
+                value, context, err = self[node.node.type](self, node.node, context) if err then return nil, context, err end
+                return Bool(not value.value), context end
+            if node.op_tok.type == T.safe then
+                value, context, err = self[node.node.type](self, node.node, context)
+                if err then
+                    if err.type == "undefined error" or err.type == "index error" then return Null(), context end
+                    return value, context, err
+                end
+                return value, context
+            end
+            return nil, context, Error("operation error", "invalid unary operation tok of type "..node.op_tok.type, node.op_tok.pos_start, node.op_tok.pos_end)
         end,
         numberNode = function(self, node, context) local value = Number(node.number_tok.value) return value.setPos(value, node.number_tok.pos_start, node.number_tok.pos_end), context end,
         boolNode = function(self, node, context) local value = Bool(node.bool_tok.value) return value.setPos(value, node.bool_tok.pos_start, node.bool_tok.pos_end), context end,
