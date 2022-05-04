@@ -68,6 +68,12 @@ table.sub = function(t, i, j)
     end
     return st
 end
+table.extend = function(t1, t2)
+    for _,v in ipairs(t2) do
+        table.insert(t1, v)
+    end
+    return t1
+end
 local function file_exists(file) local f = io.open(file, "rb"); if f then f:close() end return f ~= nil end
 local function lines_from(file) if not file_exists(file) then return error("file doesn't exist", 2) end local lines = {} for line in io.lines(file) do lines[#lines + 1] = line end return lines end
 string.join = function(s, t)
@@ -441,57 +447,71 @@ function Value()
                  return str..")"
              end,
              setPos = function(self, pos_start, pos_end) self.pos_start, self.pos_end = pos_start, pos_end return self end,
-             add = function(self, other, RETURN)
+             add = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
                      if other.tonum then
                          right = other.tonum(other)
-                         if right then return Number(left.value + right.value), nil
+                         if right then return Number(left.value + right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
-                 elseif self.type == "string" then
+                 end
+                 if self.type == "string" then
                      local left = self
                      local right
                      if other.tostr then
                          right = other.tostr(other)
-                         if right then return String(left.value .. right.value), nil
+                         if right then return String(left.value .. right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to string", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do add with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.add(other, self, true)
-                 return value, err
+                 if self.type == "list" then
+                     if other then
+                         local copy = self.copy(self)
+                         table.insert(copy.value, other)
+                         return List(copy.value)
+                     else return nil, Error("cast error", "cannot cast "..other.type.." to string", other.pos_start, other.pos_end) end
+                 end
+                 return nil, Error("operation error", "cannot do add with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             sub = function(self, other, RETURN)
+             sub = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
                      if other.tonum then
                          right = other.tonum(other)
-                         if right then return Number(left.value - right.value), nil
+                         if right then return Number(left.value - right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do subtract with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.sub(other, self, true)
-                 return value, err
+                 if self.type == "list" then
+                     local left = self.copy(self)
+                     local right
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then
+                             table.remove(left.value, right.value+1)
+                             return List(left.value)
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
+                     end
+                 end
+                 return nil, Error("operation error", "cannot do subtract with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             mul = function(self, other, RETURN)
+             mul = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
                      if other.tonum then
                          right = other.tonum(other)
-                         if right then return Number(left.value * right.value), nil
+                         if right then return Number(left.value * right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do multiply with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.sub(other, self, true)
-                 return value, err
+                 if self.type == "list" and other.type == "list" then return List(table.extend(self.copy(self).value, other.copy(other).value)) end
+                 return nil, Error("operation error", "cannot do multiply with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             div = function(self, other, RETURN)
+             div = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
@@ -499,116 +519,125 @@ function Value()
                          right = other.tonum(other)
                          if right then
                              if left.value == 0 then
-                                 return Number(0), nil
+                                 return Number(0)
                              else
-                                 return Number(left.value / right.value), nil
+                                 return Number(left.value / right.value)
                              end
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do divide with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.div(other, self, true)
-                 return value, err
+                 return nil, Error("operation error", "cannot do divide with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             divint = function(self, other, RETURN)
+             divint = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
                      if other.tonum then
                          right = other.tonum(other)
-                         if right then return Number(left.value // right.value), nil
+                         if right then return Number(left.value // right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do integer-divide with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.divint(other, self, true)
-                 return value, err
+                 return nil, Error("operation error", "cannot do integer-divide with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             and_ = function(self, other, RETURN)
+             and_ = function(self, other)
                  if self.type == "bool" then
                      local left = self
                      local right
                      if other.tobool then
                          right = other.tobool(other)
-                         if right then return Bool(left.value and right.value), nil
+                         if right then return Bool(left.value and right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to bool", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do and-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.and_(other, self, true)
-                 return value, err
+                 return nil, Error("operation error", "cannot do and-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             or_ = function(self, other, RETURN)
+             or_ = function(self, other)
                  if self.type == "bool" then
                      local left = self
                      local right
                      if other.tobool then
                          right = other.tobool(other)
-                         if right then return Bool(left.value or right.value), nil
+                         if right then return Bool(left.value or right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to bool", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do or-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.and_(other, self, true)
-                 return value, err
+                 return nil, Error("operation error", "cannot do or-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
              ee = function(self, other) return Bool(self.value == other.value) end,
              ne = function(self, other) return Bool(self.value ~= other.value) end,
-             lt = function(self, other, RETURN)
+             lt = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
                      if other.tonum then
                          right = other.tonum(other)
-                         if right then return Bool(left.value < right.value), nil
+                         if right then return Bool(left.value < right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do less-than-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.lt(other, self, true)
-                 return value, err
+                 return nil, Error("operation error", "cannot do less-than-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             gt = function(self, other, RETURN)
+             gt = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
                      if other.tonum then
                          right = other.tonum(other)
-                         if right then return Bool(left.value > right.value), nil
+                         if right then return Bool(left.value > right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do greater-than-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.gt(other, self, true)
-                 return value, err
+                 return nil, Error("operation error", "cannot do greater-than-comp with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             lte = function(self, other, RETURN)
+             lte = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
                      if other.tonum then
                          right = other.tonum(other)
-                         if right then return Bool(left.value <= right.value), nil
+                         if right then return Bool(left.value <= right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do less-than-equal with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.lte(other, self, true)
-                 return value, err
+                 return nil, Error("operation error", "cannot do less-than-equal with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
-             gte = function(self, other, RETURN)
+             gte = function(self, other)
                  if self.type == "number" then
                      local left = self
                      local right
                      if other.tonum then
                          right = other.tonum(other)
-                         if right then return Bool(left.value >= right.value), nil
+                         if right then return Bool(left.value >= right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if RETURN then return nil, Error("operation error", "cannot do greater-than-equal with "..other.type.." and "..self.type, other.pos_start, self.pos_end) end
-                 local value, err = other.gte(other, self, true)
-                 return value, err
+                 return nil, Error("operation error", "cannot do greater-than-equal with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
+             end,
+             index = function(self, other)
+                 if self.type == "string" then
+                     local left = self
+                     local right
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then
+                             local value = left:sub(right.value+1, right.value+1)
+                             if value then return value else return nil, Error("index error", "list index out of range", other.pos_start, other.pos_end) end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
+                     end
+                 end
+                 if self.type == "list" then
+                     local left = self
+                     local right
+                     if other.tonum then
+                         right = other.tonum(other)
+                         if right then
+                             local value = left.value[right.value+1]
+                             if value then return value else return nil, Error("index error", "list index out of range", other.pos_start, other.pos_end) end
+                         else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
+                     end
+                 end
+                 return nil, Error("operation error", "cannot do index with "..self.type, other.pos_start, self.pos_end)
              end,
     }
 end
@@ -662,6 +691,7 @@ function List(list)
     class.type = "list"
     class.tobool = function(self) return Bool(#self.list > 0) end
     class.value = list
+    class.copy = function(self) return List(self.value) end
     class.str = function(self)
         local str = table.keyOfValue(S, T.listin)
         for _, v in pairs(self.value) do
@@ -739,6 +769,9 @@ local function interpret(ast, global_context)
             if op_tok.type == T.gte then if left.gte then
                 value, err = left.gte(left, right) if err then return nil, context, err end
             else return nil, context, Error("operation error", "cannot do greater-than-equal-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
+            if op_tok.type == T.index then if left.index then
+                value, err = left.index(left, right) if err then return nil, context, err end
+            else return nil, context, Error("operation error", "cannot do index on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if value then return value, context
             else return nil, context, Error("operation error", op_tok.type.." is not a valid binary operator", op_tok.pos_start, op_tok.pos_end) end
         end,
