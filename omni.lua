@@ -179,7 +179,8 @@ local function lex(fn, text)
     advance()
     local tokens = {}
     while char do
-        if table.containsKey(S, char) then
+        if char == " " or char == "\t" then advance()
+        elseif table.containsKey(S, char) then
             local s = char
             advance()
             if char then
@@ -231,7 +232,7 @@ local function lex(fn, text)
         elseif char == COMMENT then
             while char ~= "\n" and char do advance() end
         else
-            advance()
+            return nil, Error("illegal character error", '"'..char..'"', pos.copy(pos), pos.copy(pos))
         end
     end
     table.insert(tokens, Token(T.eof, nil, pos.copy(pos), pos.copy(pos)))
@@ -268,14 +269,25 @@ function BoolNode(bool_tok)
              repr = function(self) return tostring(self.bool_tok) end
     }
 end
+function NullNode(null_tok)
+    return { type = "nullNode", null_tok = null_tok, pos_start = null_tok.pos_start, pos_end = null_tok.pos_end,
+             repr = function(self) return "null" end
+    }
+end
 function StringNode(string_tok)
     return { type = "stringNode", string_tok = string_tok, pos_start = string_tok.pos_start, pos_end = string_tok.pos_end,
              repr = function(self) return "\""..tostring(self.string_tok).."\"" end
     }
 end
-function NullNode(null_tok)
-    return { type = "nullNode", null_tok = null_tok, pos_start = null_tok.pos_start, pos_end = null_tok.pos_end,
-             repr = function(self) return "null" end
+function ListNode(list, pos_start, pos_end)
+    return { type = "listNode", list = list, pos_start = pos_start, pos_end = pos_end,
+             repr = function(self)
+                 local str = table.keyOfValue(S, T.listin)
+                 for _, v in pairs(self.list) do
+                     str = str .. tostring(v) .. table.keyOfValue(S, T.sep)
+                 end
+                 return str .. table.keyOfValue(S, T.listout)
+             end
     }
 end
 function NameNode(name_tok)
@@ -296,7 +308,7 @@ local function parse(tokens)
         update_tok()
     end
     advance()
-    local bin_op, atom, index, call, power, factor, term, arith_expr, comp_expr, expr, statement, statements
+    local bin_op, list_expr, atom, index, call, power, factor, term, arith_expr, comp_expr, expr, statement, statements
     bin_op =  function (func1, ops, func2)
         if not func2 then func2 = func1 end
         local left, err = func1() if err then return nil, err end
@@ -309,6 +321,27 @@ local function parse(tokens)
             return res
         end
         return left
+    end
+    list_expr = function()
+        local start = tok.pos_start.copy(tok.pos_start)
+        advance() while tok.type == T.nl do advance() end
+        local list, node, err = {}
+        node, err = expr() if err then return nil, err end
+        table.insert(list, node)
+        if tok.type == T.listout then table.insert(list, node) return ListNode(list, start.copy(start), tok.pos_end.copy(tok.pos_end)) end
+        if tok.type == T.sep then
+            while not (tok.type == T.listout) do
+                advance() while tok.type == T.nl do advance() end
+                if tok.type == T.listout then break end
+                node, err = expr() if err then return nil, err end
+                table.insert(list, node)
+                while tok.type == T.nl do advance() end
+                if tok.type == T.listout then break end
+                if tok.type ~= T.sep then return nil, Error("invalid syntax", 'expected ",", or "]"', tok.pos_start.copy(tok.pos_start), tok.pos_end.copy(tok.pos_end)) end
+            end
+            return ListNode(list, start.copy(start), tok.pos_end.copy(tok.pos_end))
+        end
+        return nil, Error("invalid syntax", 'expected ",", or "]"')
     end
     atom = function()
         local tok_ = tok
@@ -335,10 +368,17 @@ local function parse(tokens)
         if tok.type == T.evalin then
             advance()
             local node, err = expr() if err then return nil, err end
+            if tok.type ~= T.evalout then return nil, Error("invalid syntax", 'expected ")"', tok.pos_start, tok.pos_end) end
             advance()
             return node
         end
-        return nil, Error("invalid syntax", 'expected number, bool, string, "("', tok.pos_start, tok.pos_end)
+        if tok.type == T.listin then
+            local node, err = list_expr() if err then return nil, err end
+            if tok.type ~= T.listout then return nil, Error("invalid syntax", 'expected ")"', tok.pos_start, tok.pos_end) end
+            advance()
+            return node
+        end
+        return nil, Error("invalid syntax", 'expected number, bool, string, "("', tok_.pos_start, tok_.pos_end)
     end
     index = function()
         local node, err = bin_op(atom, { T.index }, index) if err then return nil, err end
@@ -620,7 +660,16 @@ end
 function List(list)
     local class = Value()
     class.type = "list"
+    class.tobool = function(self) return Bool(#self.list > 0) end
     class.value = list
+    class.str = function(self)
+        local str = table.keyOfValue(S, T.listin)
+        for _, v in pairs(self.value) do
+            str = str .. v.str(v) .. table.keyOfValue(S, T.sep)
+        end
+        str = str:sub(1, #str-#table.keyOfValue(S, T.sep))
+        return str .. table.keyOfValue(S, T.listout)
+    end
     return class
 end
 function Context(variables)
@@ -709,6 +758,14 @@ local function interpret(ast, global_context)
         boolNode = function(self, node, context) local value = Bool(node.bool_tok.value) return value.setPos(value, node.bool_tok.pos_start, node.bool_tok.pos_end), context end,
         stringNode = function(self, node, context) local value = String(node.string_tok.value) return value.setPos(value, node.string_tok.pos_start, node.string_tok.pos_end), context end,
         nullNode = function(self, node, context) local value = Null() return value.setPos(value, node.null_tok.pos_start, node.null_tok.pos_end), context end,
+        listNode = function(self, node, context)
+            local list, value, err = {}
+            for _, v in pairs(node.list) do
+                value, context, err = self[v.type](self, v, context) if err then return nil, context, err end
+                table.insert(list, value)
+            end
+            return List(list), context
+        end,
         nameNode = function(self, node, context)
             local value, err
             value, context, err = context.get(context, node.name_tok) if err then return nil, context, err end
@@ -730,9 +787,10 @@ end
 local fn
 local text
 if arg[1] then text = string.join("\n", lines_from(arg[1])); fn = arg[1] else text = string.join("\n", lines_from(arg[0]:sub(1, #arg[0]-8).."test.o")); fn = "test.o" end
-local tokens = lex(fn, text) if tokens[1].type == T.eof then return end
+local tokens, err = lex(fn, text) if err then print(err.repr(err, text)) return end if tokens[1].type == T.eof then return end
 --print(string.join("-", tokens))
-local ast, err = parse(tokens) if err then print(err) return end
+local ast
+ast, err = parse(tokens) if err then print(err.repr(err, text)) return end
 --print(ast)
 local value, global_context = nil, Context({
     pi = { value = Number(math.pi), kw = "const" },
