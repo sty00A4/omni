@@ -15,6 +15,7 @@ toString = tostring
 tostring = function(val)
     if type(val) ~= "table" then return toString(val) end
     if val then
+        if val.str then return val.str(val) end
         if val.repr then return val.repr(val) end
         if #val == 0 then return "{}" end
         local str = "{ "
@@ -159,10 +160,10 @@ local function Token(type, value, pos_start, pos_end)
     return { type = type, value = value, pos_start = pos_start, pos_end = pos_end,
              matches = function(self, token) return self.type == token.type and self.value == token.value end,
              repr = function(self)
-                 if self.value == nil then
-                     return "["..self.type.."]"
+                 if self.value == nil then return "["..self.type.."]"
                  else
-                     return "["..tostring(self.value).."]"
+                     if self.type == "string" then return '["'..tostring(self.value)..'"]'
+                     else return "["..tostring(self.value).."]" end
                  end
              end
     }
@@ -306,17 +307,18 @@ function NullNode(null_tok)
 end
 function StringNode(string_tok)
     return { type = "stringNode", string_tok = string_tok, pos_start = string_tok.pos_start, pos_end = string_tok.pos_end,
-             repr = function(self) return "\""..tostring(self.string_tok).."\"" end
+             repr = function(self) return tostring(self.string_tok) end
     }
 end
 function ListNode(list, pos_start, pos_end)
     return { type = "listNode", list = list, pos_start = pos_start, pos_end = pos_end,
              repr = function(self)
-                 local str = table.keyOfValue(S, T.listin)
+                 local str = "( "..table.keyOfValue(S, T.listin)
                  for _, v in pairs(self.list) do
                      str = str .. tostring(v) .. table.keyOfValue(S, T.sep)
                  end
-                 return str .. table.keyOfValue(S, T.listout)
+                 str = str:sub(1, #str-1)
+                 return str .. table.keyOfValue(S, T.listout).." )"
              end
     }
 end
@@ -360,7 +362,7 @@ local function parse(tokens)
         local list, node, err = {}
         node, err = expr() if err then return nil, err end
         table.insert(list, node)
-        if tok.type == T.listout then table.insert(list, node) return ListNode(list, start.copy(start), tok.pos_end.copy(tok.pos_end)) end
+        if tok.type == T.listout then return ListNode(list, start.copy(start), tok.pos_end.copy(tok.pos_end)) end
         if tok.type == T.sep then
             while not (tok.type == T.listout) do
                 advance() while tok.type == T.nl do advance() end
@@ -772,7 +774,7 @@ function String(str)
     class.tostr = function(self) return String(tostring(self.value)) end
     class.tobool = function(self) return Bool(#tostring(self.value) > 0) end
     class.value = tostring(str)
-    class.str = function(self) return self.value end
+    class.str = function(self) return "\""..self.value.."\"" end
     return class
 end
 function List(list)
