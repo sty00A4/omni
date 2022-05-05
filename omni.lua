@@ -16,6 +16,7 @@ tostring = function(val)
     if type(val) ~= "table" then return toString(val) end
     if val then
         if val.repr then return val.repr(val) end
+        if #val == 0 then return "{}" end
         local str = "{ "
         for k, v in pairs(val) do
             if type(v) == "string" then
@@ -31,9 +32,8 @@ tostring = function(val)
             end
         end
         return str:sub(1, #str-2).." }"
-    else
-        return "{}"
     end
+    return ""
 end
 table.containsKey = function(t, k) for key, _ in pairs(t) do if key == k then return true end end return false end
 table.contains = function(t, v)
@@ -325,6 +325,11 @@ function NameNode(name_tok)
              repr = function(self) return tostring(self.name_tok) end
     }
 end
+function CallNode(func_node, arg_nodes, pos_start, pos_end)
+    return { type = "callNode", func_node = func_node, arg_nodes = arg_nodes, pos_start = pos_start, pos_end = pos_end,
+             repr = function(self) return "( call "..tostring(self.func_node).." "..tostring(self.arg_nodes).." )" end
+    }
+end
 local function parse(tokens)
     local tok
     local tok_idx = 0
@@ -411,7 +416,6 @@ local function parse(tokens)
         local node, err = bin_op(atom, { T.index }) if err then return nil, err end
         return node
     end
-    call = function()  end
     safe = function()
         if tok.matches(tok, Token(T.safe)) then
             local op_tok = tok
@@ -422,8 +426,30 @@ local function parse(tokens)
         local node, err = bin_op(index, { T.pow, T.mod }, factor) if err then return nil, err end
         return node
     end
-    power = function()
+    call = function()
+        local pos_start = tok.pos_start.copy(tok)
         local node, err = safe() if err then return nil, err end
+        if tok.type == T.evalin then
+            local func = node
+            advance()
+            while tok.type == T.nl do advance() end
+            if tok.type == T.evalout then advance() return CallNode(func, {}, pos_start, tok.pos_start.copy(tok)) end
+            local args = {}
+            while true do
+                node, err = expr() if err then return nil, err end
+                table.insert(args, node)
+                while tok.type == T.nl do advance() end
+                if tok.type == T.evalout then break end
+                if tok.type ~= T.sep then return nil, Error("invalid syntax", 'expected "," or ")"', tok.pos_start, tok.pos_end) end
+                advance()
+                while tok.type == T.nl do advance() end
+            end
+            return CallNode(func, args, pos_start, tok.pos_start.copy(tok))
+        end
+        return node
+    end
+    power = function()
+        local node, err = bin_op(call, { T.pow, T.mod }, factor) if err then return nil, err end
         return node
     end
     factor = function()
@@ -767,9 +793,7 @@ function List(list)
 end
 function Context(variables)
     return { vars = variables,
-             copy = function(self)
-                 return Context(self.vars)
-             end,
+             copy = function(self) return Context(self.vars) end,
              get = function(self, name_tok)
                  if not self.vars[name_tok.value] then return nil, self, Error("undefined error", "name is not defined", name_tok.pos_start, name_tok.pos_end) end
                  return self.vars[name_tok.value].value, self
@@ -892,6 +916,9 @@ local function interpret(ast, global_context)
                 if returning then return value, context, returning end
                 if value then table.insert(values, value) end
             end
+            return Null(), context
+        end,
+        callNode = function(self, node, context)
             return Null(), context
         end,
         returnNode = function(self, node, context)

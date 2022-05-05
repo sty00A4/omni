@@ -1,3 +1,0 @@
-val name = "sty"
-val age = 17
-return "my name is " + name + " and I'm " + age + " years old"
