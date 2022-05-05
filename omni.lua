@@ -114,9 +114,10 @@ local S = {
 }
 local K = {
     valDef = "val", constDef = "const", typeDef = "type",
-    ["if"] = "if", ["else"] = "else", elif = "elif", ["while"] = "while", ["for"] = "for", switch = "switch", case = "case", default = "default",
+    ["if"] = "if", ["else"] = "else", ["elif"] = "elif", ["while"] = "while", ["for"] = "for", ["switch"] = "switch", ["case"] = "case", ["default"] = "default",
     ["then"] = "then", ["do"] = "do", ["end"] = "end",
-    ["in"] = "in", of = "of",
+    ["in"] = "in", ["of"] = "of",
+    ["return"] = "return", ["break"] = "exit", ["continue"] = "next",
 }
 local CHARS = { "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u",
                 "v", "w", "x", "y", "z", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P",
@@ -246,9 +247,15 @@ local function lex(fn, text)
 end
 ---Parser
 function ValCreateNode(name_tok, expr)
-    return { type = "valCreateNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
-             repr = function(self) return "( val "..tostring(self.name_tok).." "..tostring(self.expr).." )" end
-    }
+    if expr then
+        return { type = "valCreateNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
+                 repr = function(self) return "( val "..tostring(self.name_tok).." "..tostring(self.expr).." )" end
+        }
+    else
+        return { type = "valCreateNode", name_tok = name_tok, pos_start = name_tok.pos_start, pos_end = name_tok.pos_end,
+                 repr = function(self) return "( val "..tostring(self.name_tok).." )" end
+        }
+    end
 end
 function ConstCreateNode(name_tok, expr)
     return { type = "constCreateNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
@@ -263,6 +270,23 @@ end
 function UnaryOpNode(op_tok, node)
     return { type = "unaryOpNode", node = node, op_tok = op_tok, pos_start = op_tok.pos_start, pos_end = node.pos_end,
              repr = function(self) return "( "..tostring(self.op_tok).." "..tostring(self.node).." )" end
+    }
+end
+function BodyNode(statements)
+    return { type = "bodyNode", statements = statements, pos_start = statements[1].pos_start, pos_end = statements[#statements].pos_end,
+             repr = function(self)
+                 local str = "{ "
+                 for _, v in pairs(self.statements) do
+                     str = str .. tostring(v) .. "; "
+                 end
+                 str = str:sub(1, #str-2)
+                 return str .. " }"
+             end
+    }
+end
+function ReturnNode(node, pos_start)
+    return { type = "returnNode", node = node, pos_start = pos_start, pos_end = node.pos_end,
+             repr = function(self) return "( return "..tostring(self.node).." )" end
     }
 end
 function NumberNode(number_tok)
@@ -305,16 +329,14 @@ local function parse(tokens)
     local tok
     local tok_idx = 0
     local function update_tok()
-        if tok_idx >= 0 and tok_idx < #tokens then
-            tok = tokens[tok_idx]
-        end
+        if tok_idx >= 0 and tok_idx <= #tokens then tok = tokens[tok_idx] end
     end
     local function advance()
         tok_idx = tok_idx + 1
         update_tok()
     end
     advance()
-    local bin_op, list_expr, atom, index, call, power, factor, term, arith_expr, comp_expr, expr, statement, statements
+    local bin_op, list_expr, atom, index, call, safe, power, factor, term, arith_expr, comp_expr, expr, statement, statements
     bin_op =  function (func1, ops, func2)
         if not func2 then func2 = func1 end
         local left, err = func1() if err then return nil, err end
@@ -323,8 +345,7 @@ local function parse(tokens)
             advance()
             local right
             right, err = func2() if err then return nil, err end
-            local res = BinOpNode(left, op_tok, right)
-            return res
+            left = BinOpNode(left, op_tok, right)
         end
         return left
     end
@@ -387,12 +408,22 @@ local function parse(tokens)
         return nil, Error("invalid syntax", 'expected number, bool, string, "("', tok_.pos_start, tok_.pos_end)
     end
     index = function()
-        local node, err = bin_op(atom, { T.index }, index) if err then return nil, err end
+        local node, err = bin_op(atom, { T.index }) if err then return nil, err end
         return node
     end
     call = function()  end
-    power = function()
+    safe = function()
+        if tok.matches(tok, Token(T.safe)) then
+            local op_tok = tok
+            advance()
+            local node, err = bin_op(index, { T.pow, T.mod }, factor) if err then return nil, err end
+            return UnaryOpNode(op_tok, node)
+        end
         local node, err = bin_op(index, { T.pow, T.mod }, factor) if err then return nil, err end
+        return node
+    end
+    power = function()
+        local node, err = safe() if err then return nil, err end
         return node
     end
     factor = function()
@@ -406,37 +437,69 @@ local function parse(tokens)
         return node
     end
     term = function()
-        local node, err = bin_op(factor, { T.mul, T.div, T.divint}, term) if err then return nil, err end
+        local node, err = bin_op(factor, { T.mul, T.div, T.divint}) if err then return nil, err end
         return node
     end
     arith_expr = function()
-        local node, err = bin_op(term, { T.plus, T.minus }, arith_expr) if err then return nil, err end
+        local node, err = bin_op(term, { T.plus, T.minus }) if err then return nil, err end
         return node
     end
     comp_expr = function()
-        if tok.matches(tok, Token(T.not_)) or tok.matches(tok, Token(T.safe)) then
+        if tok.matches(tok, Token(T.not_)) then
             local op_tok = tok
             advance()
             local node, err = comp_expr() if err then return nil, err end
             return UnaryOpNode(op_tok, node)
         end
-        local node, err = bin_op(arith_expr, { T.ee, T.ne, T.lt, T.gt, T.lte, T.gte }, comp_expr) if err then return nil, err end
+        local node, err = bin_op(arith_expr, { T.ee, T.ne, T.lt, T.gt, T.lte, T.gte }) if err then return nil, err end
         return node
     end
     expr = function()
-        local node, err = bin_op(comp_expr, { T.and_, T.or_ }, expr) if err then return nil, err end
+        local node, err = bin_op(comp_expr, { T.and_, T.or_ }) if err then return nil, err end
         return node
     end
     statement = function()
+        if tok.matches(tok, Token(T.keyword, K.valDef)) then
+            advance()
+            if not (tok.type == T.name) then return nil, Error("invalid syntax", "expected name", tok.pos_start, tok.pos_end) end
+            local name = tok
+            advance()
+            if (tok.type == T.eq) then
+                advance()
+                local node, err = expr() if err then return nil, err end
+                return ValCreateNode(name, node)
+            else
+                return ValCreateNode(name)
+            end
+        end
+        if tok.matches(tok, Token(T.keyword, K["return"])) then
+            local pos_start = tok.pos_start
+            advance()
+            if tok.type == T.nl then return ReturnNode(Null(), pos_start) end
+            local node, err = expr() if err then return nil, err end
+            return ReturnNode(node, pos_start)
+        end
         local node, err = expr() if err then return nil, err end
         return node
     end
     statements = function()
-        local statement_, err = statement()
-        return statement_, err
+        local statements_, err = {}
+        while not (tok.type == T.eof) do
+            local statement_
+            while tok.type == T.nl do advance() end
+            statement_, err = statement() if err then return nil, err end
+            advance()
+            if statement_ then table.insert(statements_, statement_) end
+            while tok.type == T.nl do advance() end
+        end
+        if #statements_ > 1 then
+            return BodyNode(statements_)
+        else
+            return statements_[1]
+        end
     end
     local ast, err = statements() if err then return nil, err end
-    if tokens[tok_idx].type == T.eof then return ast else return nil, Error("run-time error", "no use for expression", tokens[tok_idx].pos_start, tokens[tok_idx].pos_end) end
+    if tok.type == T.eof then return ast else return nil, Error("run-time error", "no use for expression", tokens[tok_idx].pos_start, tokens[tok_idx].pos_end) end
 end
 ---Interpreter
 function Value()
@@ -666,7 +729,7 @@ function Null()
     local class = Value()
     class.type = "null"
     class.tonum = function(self) return Number(0) end
-    class.tostr = function(self) return String("null") end
+    class.tostr = function(self) return String("") end
     class.tobool = function(self) return Bool(false) end
     class.str = function(self) return "null" end
     return class
@@ -704,6 +767,9 @@ function List(list)
 end
 function Context(variables)
     return { vars = variables,
+             copy = function(self)
+                 return Context(self.vars)
+             end,
              get = function(self, name_tok)
                  if not self.vars[name_tok.value] then return nil, self, Error("undefined error", "name is not defined", name_tok.pos_start, name_tok.pos_end) end
                  return self.vars[name_tok.value].value, self
@@ -723,118 +789,132 @@ end
 local function interpret(ast, global_context)
     local visit = {
         binOpNode = function(self, node, context)
-            local left
             local op_tok = node.op_tok
-            local right
-            local value
-            local err
-            left, context, err = self[node.left.type](self, node.left, context) if err then return nil, context, err end
-            right, context, err = self[node.right.type](self, node.right, context) if err then return nil, context, err end
+            local left, right, value, returning, err
+            left, context, returning, err = self[node.left.type](self, node.left, context) if err then return nil, context, false, err end
+            right, context, returning, err = self[node.right.type](self, node.right, context) if err then return nil, context, false, err end
             if op_tok.type == T.plus then if left.add then
-                value, err = left.add(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do add on "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.add(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do add on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.minus then if left.sub then
-                value, err = left.sub(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do subtract "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.sub(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do subtract "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.mul then if left.mul then
-                value, err = left.mul(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do multiply "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.mul(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do multiply "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.div then if left.div then
-                value, err = left.div(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do divide "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.div(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do divide "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.divint then if left.divint then
-                value, err = left.divint(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do integer-divide "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.divint(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do integer-divide "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.or_ then if left.or_ then
-                value, err = left.or_(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do or-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.or_(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do or-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.and_ then if left.and_ then
-                value, err = left.and_(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do and-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.and_(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do and-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.ee then if left.ee then
-                value, err = left.ee(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do equal-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.ee(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do equal-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.ne then if left.ne then
-                value, err = left.ne(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do not-equal-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.ne(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do not-equal-comp "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.lt then if left.lt then
-                value, err = left.lt(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do less-than-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.lt(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do less-than-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.gt then if left.gt then
-                value, err = left.gt(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do greater-than-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.gt(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do greater-than-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.lte then if left.lte then
-                value, err = left.lte(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do less-than-equal-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.lte(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do less-than-equal-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.gte then if left.gte then
-                value, err = left.gte(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do greater-than-equal-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.gte(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do greater-than-equal-comp on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if op_tok.type == T.index then if left.index then
-                value, err = left.index(left, right) if err then return nil, context, err end
-            else return nil, context, Error("operation error", "cannot do index on "..tostring(left.type), left.pos_start, left.pos_end) end end
+                value, err = left.index(left, right) if err then return nil, context, false, err end
+            else return nil, context, false, Error("operation error", "cannot do index on "..tostring(left.type), left.pos_start, left.pos_end) end end
             if value then return value, context
-            else return nil, context, Error("operation error", op_tok.type.." is not a valid binary operator", op_tok.pos_start, op_tok.pos_end) end
+            else return nil, context, false, Error("operation error", op_tok.type.." is not a valid binary operator", op_tok.pos_start, op_tok.pos_end) end
         end,
         unaryOpNode = function(self, node, context)
-            local value
-            local err
+            local value, returning, err
             if node.op_tok.type == T.minus then
-                value, context, err = self[node.node.type](self, node.node, context) if err then return nil, context, err end
-                return Number(-value.value), context
+                value, context, returning, err = self[node.node.type](self, node.node, context) if err then return nil, context, false, err end
+                if value.tonum then return Number(-value.tonum().value), context
+                else return nil, context, false, Error("cast error", "cannot cast "..value.type.." to number", node.node.pos_start, node.node.pos_end) end
             end
             if node.op_tok.type == T.not_ then
-                value, context, err = self[node.node.type](self, node.node, context) if err then return nil, context, err end
-                return Bool(not value.value), context end
+                value, context, returning, err = self[node.node.type](self, node.node, context) if err then return nil, context, false, err end
+                if value.tobool then return Bool(not value.value), context
+                else return nil, context, false, Error("cast error", "cannot cast "..value.type" to number", node.node.pos_start, node.node.pos_end) end
+            end
             if node.op_tok.type == T.safe then
-                value, context, err = self[node.node.type](self, node.node, context)
+                value, context, returning, err = self[node.node.type](self, node.node, context)
                 if err then
                     if err.type == "undefined error" or err.type == "index error" then return Null(), context end
-                    return value, context, err
+                    return value, context, false, err
                 end
                 return value, context
             end
-            return nil, context, Error("operation error", "invalid unary operation tok of type "..node.op_tok.type, node.op_tok.pos_start, node.op_tok.pos_end)
+            return nil, context, false, Error("operation error", "invalid unary operation tok of type "..node.op_tok.type, node.op_tok.pos_start, node.op_tok.pos_end)
         end,
         numberNode = function(self, node, context) local value = Number(node.number_tok.value) return value.setPos(value, node.number_tok.pos_start, node.number_tok.pos_end), context end,
         boolNode = function(self, node, context) local value = Bool(node.bool_tok.value) return value.setPos(value, node.bool_tok.pos_start, node.bool_tok.pos_end), context end,
         stringNode = function(self, node, context) local value = String(node.string_tok.value) return value.setPos(value, node.string_tok.pos_start, node.string_tok.pos_end), context end,
         nullNode = function(self, node, context) local value = Null() return value.setPos(value, node.null_tok.pos_start, node.null_tok.pos_end), context end,
         listNode = function(self, node, context)
-            local list, value, err = {}
+            local list, value, returning, err = {}
             for _, v in pairs(node.list) do
-                value, context, err = self[v.type](self, v, context) if err then return nil, context, err end
+                value, context, returning, err = self[v.type](self, v, context) if err then return nil, context, false, err end
                 table.insert(list, value)
             end
             return List(list), context
         end,
         nameNode = function(self, node, context)
             local value, err
-            value, context, err = context.get(context, node.name_tok) if err then return nil, context, err end
+            value, context, err = context.get(context, node.name_tok) if err then return nil, context, false, err end
             return value, context
         end,
         valCreateNode = function(self, node, context)
-            local value
-            local err
-            if node.expr then value, context, err = self[node.expr.type](self, node.expr, context) if err then return nil, context, err end end
-            value, context, err = context.create(context, "val", node.name_tok, value) if err then return nil, context, err end
+            local value, err, returning
+            if node.expr then value, context, returning, err = self[node.expr.type](self, node.expr, context) if err then return nil, context, false, err end
+            else value = Null() end
+            value, context, returning, err = context.create(context, "val", node.name_tok, value) if err then return nil, context, false, err end
+            if value then return value, context else return Null(), context end
+        end,
+        bodyNode = function(self, node, context)
+            local values, value, returning, err = {}
+            local body_context = context.copy(context)
+            for _, n in pairs(node.statements) do
+                value, body_context, returning, err = self[n.type](self, n, body_context) if err then return nil, context, false, err end
+                if returning then return value, context, returning end
+                if value then table.insert(values, value) end
+            end
+            return Null(), context
+        end,
+        returnNode = function(self, node, context)
+            local value, returning, err
+            value, context, returning, err = self[node.node.type](self, node.node, context) if err then return nil, context, false, err end
+            return value, context, true
         end,
     }
-    local value
-    local err
-    value, global_context, err = visit[ast.type](visit, ast, global_context)
-    return value, global_context, err
+    local value, err, returning
+    value, global_context, returning, err = visit[ast.type](visit, ast, global_context)
+    return value, global_context, returning, err
 end
 ---Execution
 local fn
 local text
 if arg[1] then text = string.join("\n", lines_from(arg[1])); fn = arg[1] else text = string.join("\n", lines_from(arg[0]:sub(1, #arg[0]-8).."test.o")); fn = "test.o" end
 local tokens, err = lex(fn, text) if err then print(err.repr(err, text)) return end if tokens[1].type == T.eof then return end
---print(string.join("-", tokens))
+print(string.join("-", tokens))
 local ast
 ast, err = parse(tokens) if err then print(err.repr(err, text)) return end
---print(ast)
-local value, global_context = nil, Context({
+print(ast)
+local value, global_context, returning = nil, Context({
     pi = { value = Number(math.pi), kw = "const" },
 })
-value, global_context, err = interpret(ast, global_context)
+value, global_context, returning, err = interpret(ast, global_context)
 if err then print(err.repr(err, text)) else if value then if value.str then print(value.str(value)) end end end
