@@ -1,2 +1,2 @@
 # omni
-A programming language that implements all the features of every modern high-level programming language 
+an interpreted programming language made in lua, aiming to combine all the common features in modern high-level programming languages
