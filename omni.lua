@@ -15,8 +15,8 @@ toString = tostring
 tostring = function(val)
     if type(val) ~= "table" then return toString(val) end
     if val then
-        if val.str then return val.str(val) end
-        if val.repr then return val.repr(val) end
+        if val.str then return val:str() end
+        if val.repr then return val:repr() end
         if #val == 0 then return "{}" end
         local str = "{ "
         for k, v in pairs(val) do
@@ -24,7 +24,7 @@ tostring = function(val)
                 str = str .. k .. ": " .. '"' .. v .. '", '
             elseif type(v) == "table" then
                 if v.repr then
-                    str = str .. k .. ": " .. v.repr(v) .. ", "
+                    str = str .. k .. ": " .. v:repr() .. ", "
                 else
                     str = str .. k .. ": " .. tostring(v) .. ", "
                 end
@@ -103,12 +103,14 @@ local T = {
     keyword = "keyword", plus = "plus", minus = "minus", mul = "mul", div = "div", divint = "divint", pow = "pow", index = "index", mod = "mod",
     eq = "eq", rep = "rep", sep = "sep", nl = "nl", eof = "eof", safe = "safe",
     evalin = "evalin", evalout = "evalout", listin = "listin", listout = "listout", tablein = "tablein", tableout = "tableout",
+    bodyin = "bodyin", bodyout = "bodyout",
     not_ = "not", ee = "ee", ne = "ne", lt = "lt", gt = "gt", lte = "lte", gte = "gte",
     and_ = "and", or_ = "or",
 }
 local S = {
     [";"] = T.nl, ["\n"] = T.nl, ["="] = T.eq, [":"] = T.rep, [","] = T.sep, ["?"] = T.safe,
-    ["("] = T.evalin, [")"] = T.evalout, ["["] = T.listin, ["]"] = T.listout, ["{"] = T.tablein, ["}"] = T.tableout,
+    ["("] = T.evalin, [")"] = T.evalout, ["["] = T.listin, ["]"] = T.listout, ["<"] = T.tablein, [">"] = T.tableout,
+    ["{"] = T.bodyin, ["}"] = T.bodyout,
     ["+"] = T.plus, ["-"] = T.minus, ["*"] = T.mul, ["**"] = T.pow, ["/"] = T.div, ["//"] = T.divint, ["."] = T.index, ["%"] = T.mod,
     ["!"] = T.not_, ["=="] = T.ee, ["!="] = T.ne, ["<"] = T.lt, [">"] = T.gt, ["<="] = T.lte, [">="] = T.gte,
     ["&"] = T.and_, ["|"] = T.or_,
@@ -193,39 +195,39 @@ local function lex(fn, text)
             advance()
             if char then
                 if table.containsKey(S, s..char) then
-                    table.insert(tokens, Token(S[s..char], nil, pos.copy(pos), pos.copy(pos)))
+                    table.insert(tokens, Token(S[s..char], nil, pos:copy(), pos:copy()))
                     advance()
-                else table.insert(tokens, Token(S[s], nil, pos.copy(pos), pos.copy(pos))) end
-            else table.insert(tokens, Token(S[s], nil, pos.copy(pos), pos.copy(pos))) end
+                else table.insert(tokens, Token(S[s], nil, pos:copy(), pos:copy())) end
+            else table.insert(tokens, Token(S[s], nil, pos:copy(), pos:copy())) end
         elseif table.contains(CHARS, char) then
-            local start = pos.copy(pos)
+            local start = pos:copy()
             local name = ""
             while table.contains(CHARS, char) or table.contains(NUMBERS, char) do
                 name = name..char
                 advance()
             end
             if table.contains(K, name) then
-                table.insert(tokens, Token(T.keyword, name, start.copy(start), pos.copy(pos)))
+                table.insert(tokens, Token(T.keyword, name, start:copy(), pos:copy()))
             elseif name == "true" or name == "false" then
-                table.insert(tokens, Token(T.bool, name == "true", start.copy(start), pos.copy(pos)))
+                table.insert(tokens, Token(T.bool, name == "true", start:copy(), pos:copy()))
             elseif name == "null" then
-                table.insert(tokens, Token(T.null, nil, start.copy(start), pos.copy(pos)))
+                table.insert(tokens, Token(T.null, nil, start:copy(), pos:copy()))
             else
-                table.insert(tokens, Token(T.name, name, start.copy(start), pos.copy(pos)))
+                table.insert(tokens, Token(T.name, name, start:copy(), pos:copy()))
             end
         elseif table.contains(NUMBERS, char) then
-            local start = pos.copy(pos)
+            local start = pos:copy()
             local number = ""
             while table.contains(NUMBERS, char) or char == "." do
                 number = number..char
                 advance()
             end
-            table.insert(tokens, Token(T.num, tonumber(number), start.copy(start), pos.copy(pos)))
+            table.insert(tokens, Token(T.num, tonumber(number), start:copy(), pos:copy()))
         elseif char == STRDEF then
-            local start = pos.copy(pos)
+            local start = pos:copy()
             advance()
             if char == '"' then
-                table.insert(tokens, Token(T.str, "", start.copy(start), pos.copy(pos)))
+                table.insert(tokens, Token(T.str, "", start:copy(), pos:copy()))
                 advance()
             else
                 local str = char
@@ -234,16 +236,16 @@ local function lex(fn, text)
                     str = str .. char
                     advance()
                 end
-                table.insert(tokens, Token(T.str, str, start.copy(start), pos.copy(pos)))
+                table.insert(tokens, Token(T.str, str, start:copy(), pos:copy()))
                 advance()
             end
         elseif char == COMMENT then
             while char ~= "\n" and char do advance() end
         else
-            return nil, Error("illegal character error", '"'..char..'"', pos.copy(pos), pos.copy(pos))
+            return nil, Error("illegal character error", '"'..char..'"', pos:copy(), pos:copy())
         end
     end
-    table.insert(tokens, Token(T.eof, nil, pos.copy(pos), pos.copy(pos)))
+    table.insert(tokens, Token(T.eof, nil, pos:copy(), pos:copy()))
     return tokens
 end
 ---Parser
@@ -313,12 +315,12 @@ end
 function ListNode(list, pos_start, pos_end)
     return { type = "listNode", list = list, pos_start = pos_start, pos_end = pos_end,
              repr = function(self)
-                 local str = "( "..table.keyOfValue(S, T.listin)
+                 local str = "( "
                  for _, v in pairs(self.list) do
                      str = str .. tostring(v) .. table.keyOfValue(S, T.sep)
                  end
                  str = str:sub(1, #str-1)
-                 return str .. table.keyOfValue(S, T.listout).." )"
+                 return str .. " )"
              end
     }
 end
@@ -332,18 +334,38 @@ function CallNode(func_node, arg_nodes, pos_start, pos_end)
              repr = function(self) return "( call "..tostring(self.func_node).." "..tostring(self.arg_nodes).." )" end
     }
 end
+function IfExprNode(cases, conditions, bodies, else_body)
+    return { type = "ifExprNode", cases = cases, conditions = conditions, bodies = bodies, else_body = else_body,
+             repr = function(self)
+                 local str = "( "
+                 for i = 1, #self.cases do
+                     str = str .. "( " .. tostring(self.cases[i]) .. tostring(self.conditions[i]) .. tostring(self.bodies[i]) .. " ) "
+                 end
+                 str = str:sub(1, #str-1)
+                 if self.else_body then
+                     str = str .. "( " .. tostring(self.else_body) .. " )"
+                 end
+                 return str .. " )"
+             end
+    }
+end
 local function parse(tokens)
     local tok
-    local tok_idx = 0
-    local function update_tok()
-        if tok_idx >= 0 and tok_idx <= #tokens then tok = tokens[tok_idx] end
-    end
+    local tok_idx, advance_count = 0, 0
+    local function update_tok() if tok_idx >= 0 and tok_idx <= #tokens then tok = tokens[tok_idx] end end
     local function advance()
         tok_idx = tok_idx + 1
+        advance_count = advance_count + 1
+        update_tok()
+    end
+    local function reverse(amount)
+        if not amount then amount = 1 end
+        tok_idx = tok_idx - amount
+        advance_count = advance_count - amount
         update_tok()
     end
     advance()
-    local bin_op, list_expr, atom, index, call, safe, power, factor, term, arith_expr, comp_expr, expr, statement, statements
+    local bin_op, list_expr, if_expr, if_statement, atom, index, call, safe, power, factor, term, arith_expr, comp_expr, expr, statement, statements
     bin_op =  function (func1, ops, func2)
         if not func2 then func2 = func1 end
         local left, err = func1() if err then return nil, err end
@@ -357,12 +379,12 @@ local function parse(tokens)
         return left
     end
     list_expr = function()
-        local start = tok.pos_start.copy(tok.pos_start)
+        local start = tok.pos_start:copy()
         advance() while tok.type == T.nl do advance() end
         local list, node, err = {}
         node, err = expr() if err then return nil, err end
         table.insert(list, node)
-        if tok.type == T.listout then return ListNode(list, start.copy(start), tok.pos_end.copy(tok.pos_end)) end
+        if tok.type == T.listout then return ListNode(list, start:copy(), tok.pos_end:copy()) end
         if tok.type == T.sep then
             while not (tok.type == T.listout) do
                 advance() while tok.type == T.nl do advance() end
@@ -371,14 +393,32 @@ local function parse(tokens)
                 table.insert(list, node)
                 while tok.type == T.nl do advance() end
                 if tok.type == T.listout then break end
-                if tok.type ~= T.sep then return nil, Error("invalid syntax", 'expected ",", or "]"', tok.pos_start.copy(tok.pos_start), tok.pos_end.copy(tok.pos_end)) end
+                if tok.type ~= T.sep then return nil, Error("invalid syntax", 'expected ",", or "]"', tok.pos_start:copy(), tok.pos_end:copy()) end
             end
-            return ListNode(list, start.copy(start), tok.pos_end.copy(tok.pos_end))
+            return ListNode(list, start:copy(), tok.pos_end:copy())
         end
         return nil, Error("invalid syntax", 'expected ",", or "]"')
     end
+    if_expr = function()
+        local cases, conditions, exprs = {}, {}, {}
+        local case, condition, expr_, err = tok
+        condition, err = expr() if err then return nil, err end
+        expr_, err = expr() if err then return nil, err end
+        table.insert(cases, case) table.insert(conditions, condition) table.insert(exprs, expr_)
+        if tok.matches(tok, Token(T.keyword, K["elif"])) or tok:matches(Token(T.keyword, K["else"])) then
+            while true do
+
+            end
+        end
+        print(tok)
+        return condition
+    end
     atom = function()
         local tok_ = tok
+        if tok.type == T.eof then
+            advance()
+            return
+        end
         if tok.type == T.name then
             advance()
             return NameNode(tok_)
@@ -412,14 +452,26 @@ local function parse(tokens)
             advance()
             return node
         end
-        return nil, Error("invalid syntax", 'expected number, bool, string, "("', tok_.pos_start, tok_.pos_end)
+        if tok.type == T.bodyin then
+            advance()
+            local node, err = statements() if err then return nil, err end
+            if tok.type ~= T.bodyout then return nil, Error("invalid syntax", 'expected "}"', tok.pos_start, tok.pos_end) end
+            advance()
+            return node
+        end
+        if tok:matches(Token(T.keyword, K["if"])) then
+            local node, err = if_expr() if err then return nil, err end
+            advance()
+            return node
+        end
+        return nil, Error("invalid syntax", 'expected number, bool, string, list, "(", "{"', tok_.pos_start, tok_.pos_end)
     end
     index = function()
         local node, err = bin_op(atom, { T.index }) if err then return nil, err end
         return node
     end
     safe = function()
-        if tok.matches(tok, Token(T.safe)) then
+        if tok:matches(Token(T.safe)) then
             local op_tok = tok
             advance()
             local node, err = bin_op(index, { T.pow, T.mod }, factor) if err then return nil, err end
@@ -429,13 +481,13 @@ local function parse(tokens)
         return node
     end
     call = function()
-        local pos_start = tok.pos_start.copy(tok)
+        local pos_start = tok.pos_start:copy()
         local node, err = safe() if err then return nil, err end
         if tok.type == T.evalin then
             local func = node
             advance()
             while tok.type == T.nl do advance() end
-            if tok.type == T.evalout then advance() return CallNode(func, {}, pos_start, tok.pos_start.copy(tok)) end
+            if tok.type == T.evalout then advance() return CallNode(func, {}, pos_start, tok.pos_start:copy()) end
             local args = {}
             while true do
                 node, err = expr() if err then return nil, err end
@@ -446,7 +498,7 @@ local function parse(tokens)
                 advance()
                 while tok.type == T.nl do advance() end
             end
-            return CallNode(func, args, pos_start, tok.pos_start.copy(tok))
+            return CallNode(func, args, pos_start, tok.pos_start:copy())
         end
         return node
     end
@@ -473,7 +525,7 @@ local function parse(tokens)
         return node
     end
     comp_expr = function()
-        if tok.matches(tok, Token(T.not_)) then
+        if tok:matches(Token(T.not_)) then
             local op_tok = tok
             advance()
             local node, err = comp_expr() if err then return nil, err end
@@ -487,7 +539,7 @@ local function parse(tokens)
         return node
     end
     statement = function()
-        if tok.matches(tok, Token(T.keyword, K.valDef)) then
+        if tok:matches(Token(T.keyword, K.valDef)) then
             advance()
             if not (tok.type == T.name) then return nil, Error("invalid syntax", "expected name", tok.pos_start, tok.pos_end) end
             local name = tok
@@ -500,7 +552,7 @@ local function parse(tokens)
                 return ValCreateNode(name)
             end
         end
-        if tok.matches(tok, Token(T.keyword, K["return"])) then
+        if tok:matches(Token(T.keyword, K["return"])) then
             local pos_start = tok.pos_start
             advance()
             if tok.type == T.nl then return ReturnNode(Null(), pos_start) end
@@ -511,22 +563,23 @@ local function parse(tokens)
         return node
     end
     statements = function()
-        local statements_, err = {}
+        local statements_, pos_start, statement_, err = {}, tok.pos_start:copy()
+        while tok.type == T.nl do advance() end
+        statement_, err = statement() if err then return nil, err end
+        if statement_ then table.insert(statements_, statement_) end
+        local more_statements = true
         while not (tok.type == T.eof) do
-            local statement_
-            while tok.type == T.nl do advance() end
+            local nl_count = 0
+            while tok.type == T.nl do advance() nl_count = nl_count + 1 end
+            if nl_count == 0 then more_statements = false end
+            if not more_statements then break end
             statement_, err = statement() if err then return nil, err end
-            advance()
-            if statement_ then table.insert(statements_, statement_) end
-            while tok.type == T.nl do advance() end
+            if statement_ then table.insert(statements_, statement_) else reverse(advance_count) end
         end
-        if #statements_ > 1 then
-            return BodyNode(statements_)
-        else
-            return statements_[1]
-        end
+        return BodyNode(statements_)
     end
     local ast, err = statements() if err then return nil, err end
+    if #ast.statements == 1 then ast = ast.statements[1] end
     if tok.type == T.eof then return ast else return nil, Error("run-time error", "no use for expression", tokens[tok_idx].pos_start, tokens[tok_idx].pos_end) end
 end
 ---Interpreter
@@ -543,7 +596,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then return Number(left.value + right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
@@ -552,14 +605,14 @@ function Value()
                      local left = self
                      local right
                      if other.tostr then
-                         right = other.tostr(other)
+                         right = other:tostr()
                          if right then return String(left.value .. right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to string", other.pos_start, other.pos_end) end
                      end
                  end
                  if self.type == "list" then
                      if other then
-                         local copy = self.copy(self)
+                         local copy = self:copy()
                          table.insert(copy.value, other)
                          return List(copy.value)
                      else return nil, Error("cast error", "cannot cast "..other.type.." to string", other.pos_start, other.pos_end) end
@@ -571,16 +624,16 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then return Number(left.value - right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
                  if self.type == "list" then
-                     local left = self.copy(self)
+                     local left = self:copy()
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then
                              table.remove(left.value, right.value+1)
                              return List(left.value)
@@ -594,12 +647,12 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then return Number(left.value * right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
-                 if self.type == "list" and other.type == "list" then return List(table.extend(self.copy(self).value, other.copy(other).value)) end
+                 if self.type == "list" and other.type == "list" then return List(table.extend(self:copy().value, other:copy().value)) end
                  return nil, Error("operation error", "cannot do multiply with "..other.type.." and "..self.type, other.pos_start, self.pos_end)
              end,
              div = function(self, other)
@@ -607,7 +660,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then
                              if left.value == 0 then
                                  return Number(0)
@@ -624,7 +677,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then return Number(left.value // right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
@@ -636,7 +689,7 @@ function Value()
                      local left = self
                      local right
                      if other.tobool then
-                         right = other.tobool(other)
+                         right = other:tobool()
                          if right then return Bool(left.value and right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to bool", other.pos_start, other.pos_end) end
                      end
@@ -648,7 +701,7 @@ function Value()
                      local left = self
                      local right
                      if other.tobool then
-                         right = other.tobool(other)
+                         right = other:tobool()
                          if right then return Bool(left.value or right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to bool", other.pos_start, other.pos_end) end
                      end
@@ -662,7 +715,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then return Bool(left.value < right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
@@ -674,7 +727,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then return Bool(left.value > right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
@@ -686,7 +739,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then return Bool(left.value <= right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
@@ -698,7 +751,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then return Bool(left.value >= right.value)
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
@@ -710,7 +763,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then
                              local value = left:sub(right.value+1, right.value+1)
                              if value then return value else return nil, Error("index error", "list index out of range", other.pos_start, other.pos_end) end
@@ -721,7 +774,7 @@ function Value()
                      local left = self
                      local right
                      if other.tonum then
-                         right = other.tonum(other)
+                         right = other:tonum()
                          if right then
                              local value = left.value[right.value+1]
                              if value then return value else return nil, Error("index error", "list index out of range", other.pos_start, other.pos_end) end
@@ -786,7 +839,7 @@ function List(list)
     class.str = function(self)
         local str = table.keyOfValue(S, T.listin)
         for _, v in pairs(self.value) do
-            str = str .. v.str(v) .. table.keyOfValue(S, T.sep)
+            str = str .. v:str() .. table.keyOfValue(S, T.sep)
         end
         str = str:sub(1, #str-#table.keyOfValue(S, T.sep))
         return str .. table.keyOfValue(S, T.listout)
@@ -886,10 +939,10 @@ local function interpret(ast, global_context)
             end
             return nil, context, false, Error("operation error", "invalid unary operation tok of type "..node.op_tok.type, node.op_tok.pos_start, node.op_tok.pos_end)
         end,
-        numberNode = function(self, node, context) local value = Number(node.number_tok.value) return value.setPos(value, node.number_tok.pos_start, node.number_tok.pos_end), context end,
-        boolNode = function(self, node, context) local value = Bool(node.bool_tok.value) return value.setPos(value, node.bool_tok.pos_start, node.bool_tok.pos_end), context end,
-        stringNode = function(self, node, context) local value = String(node.string_tok.value) return value.setPos(value, node.string_tok.pos_start, node.string_tok.pos_end), context end,
-        nullNode = function(self, node, context) local value = Null() return value.setPos(value, node.null_tok.pos_start, node.null_tok.pos_end), context end,
+        numberNode = function(self, node, context) local value = Number(node.number_tok.value) return value:setPos(node.number_tok.pos_start, node.number_tok.pos_end), context end,
+        boolNode = function(self, node, context) local value = Bool(node.bool_tok.value) return value:setPos(node.bool_tok.pos_start, node.bool_tok.pos_end), context end,
+        stringNode = function(self, node, context) local value = String(node.string_tok.value) return value:setPos(node.string_tok.pos_start, node.string_tok.pos_end), context end,
+        nullNode = function(self, node, context) local value = Null() return value:setPos(node.null_tok.pos_start, node.null_tok.pos_end), context end,
         listNode = function(self, node, context)
             local list, value, returning, err = {}
             for _, v in pairs(node.list) do
@@ -900,19 +953,19 @@ local function interpret(ast, global_context)
         end,
         nameNode = function(self, node, context)
             local value, err
-            value, context, err = context.get(context, node.name_tok) if err then return nil, context, false, err end
+            value, context, err = context:get(node.name_tok) if err then return nil, context, false, err end
             return value, context
         end,
         valCreateNode = function(self, node, context)
             local value, err, returning
             if node.expr then value, context, returning, err = self[node.expr.type](self, node.expr, context) if err then return nil, context, false, err end
             else value = Null() end
-            value, context, returning, err = context.create(context, "val", node.name_tok, value) if err then return nil, context, false, err end
+            value, context, returning, err = context:create("val", node.name_tok, value) if err then return nil, context, false, err end
             if value then return value, context else return Null(), context end
         end,
         bodyNode = function(self, node, context)
             local values, value, returning, err = {}
-            local body_context = context.copy(context)
+            local body_context = context:copy()
             for _, n in pairs(node.statements) do
                 value, body_context, returning, err = self[n.type](self, n, body_context) if err then return nil, context, false, err end
                 if returning then return value, context, returning end
@@ -937,13 +990,13 @@ end
 local fn
 local text
 if arg[1] then text = string.join("\n", lines_from(arg[1])); fn = arg[1] else text = string.join("\n", lines_from(arg[0]:sub(1, #arg[0]-8).."test.o")); fn = "test.o" end
-local tokens, err = lex(fn, text) if err then print(err.repr(err, text)) return end if tokens[1].type == T.eof then return end
+local tokens, err = lex(fn, text) if err then print(err:repr(text)) return end if tokens[1].type == T.eof then return end
 print(string.join("-", tokens))
 local ast
-ast, err = parse(tokens) if err then print(err.repr(err, text)) return end
+ast, err = parse(tokens) if err then print(err:repr(text)) return end
 print(ast)
 local value, global_context, returning = nil, Context({
     pi = { value = Number(math.pi), kw = "const" },
 })
 value, global_context, returning, err = interpret(ast, global_context)
-if err then print(err.repr(err, text)) else if value then if value.str then print(value.str(value)) end end end
+if err then print(err:repr(text)) else if value then if value.str then print(value:str()) end end end
