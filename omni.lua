@@ -991,10 +991,10 @@ local fn
 local text
 if arg[1] then text = string.join("\n", lines_from(arg[1])); fn = arg[1] else text = string.join("\n", lines_from(arg[0]:sub(1, #arg[0]-8).."test.o")); fn = "test.o" end
 local tokens, err = lex(fn, text) if err then print(err:repr(text)) return end if tokens[1].type == T.eof then return end
-print(string.join("-", tokens))
+if not arg[1] then print(string.join("-", tokens)) end
 local ast
 ast, err = parse(tokens) if err then print(err:repr(text)) return end
-print(ast)
+if not arg[1] then print(ast) end
 local value, global_context, returning = nil, Context({
     pi = { value = Number(math.pi), kw = "const" },
 })
