@@ -678,7 +678,7 @@ function Value()
                      local right
                      if other.tonum then
                          right = other:tonum()
-                         if right then return Number(left.value // right.value)
+                         if right then return Number(math.floor(left.value / right.value))
                          else return nil, Error("cast error", "cannot cast "..other.type.." to number", other.pos_start, other.pos_end) end
                      end
                  end
