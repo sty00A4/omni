@@ -1,2 +1,10 @@
-val a = 1
-return a + 2
+val a = 4
+if a == 1 {
+    return "one"
+} elif a == 2 {
+    return "two"
+} elif a == 3 {
+    return "three"
+} else {
+    return "cant count that high O~o"
+}

@@ -118,7 +118,7 @@ local S = {
 local K = {
     valDef = "val", constDef = "const", typeDef = "type",
     ["if"] = "if", ["else"] = "else", ["elif"] = "elif", ["while"] = "while", ["for"] = "for", ["switch"] = "switch", ["case"] = "case", ["default"] = "default",
-    ["then"] = "then", ["do"] = "do", ["end"] = "end",
+    ["then"] = "then", ["do"] = "do",
     ["in"] = "in", ["of"] = "of",
     ["return"] = "return", ["break"] = "exit", ["continue"] = "next",
 }
@@ -401,17 +401,21 @@ local function parse(tokens)
     end
     if_expr = function()
         local cases, conditions, exprs = {}, {}, {}
-        local case, condition, expr_, err = tok
+        local case, condition, expr_, else_body, err = tok
+        advance()
         condition, err = expr() if err then return nil, err end
         expr_, err = expr() if err then return nil, err end
         table.insert(cases, case) table.insert(conditions, condition) table.insert(exprs, expr_)
-        if tok.matches(tok, Token(T.keyword, K["elif"])) or tok:matches(Token(T.keyword, K["else"])) then
+        if tok:matches(Token(T.keyword, K["elif"])) or tok:matches(Token(T.keyword, K["else"])) then
             while true do
-
+                if tok:matches(Token(T.keyword, K["else"])) then advance() else_body, err = expr() if err then return nil, err end break end
+                if tok:matches(Token(T.keyword, K["elif"])) then case = tok; advance() end
+                condition, err = expr() if err then return nil, err end
+                expr_, err = expr() if err then return nil, err end
+                table.insert(cases, case) table.insert(conditions, condition) table.insert(exprs, expr_)
             end
         end
-        print(tok)
-        return condition
+        return IfExprNode(cases, conditions, exprs, else_body)
     end
     atom = function()
         local tok_ = tok
@@ -573,6 +577,7 @@ local function parse(tokens)
             while tok.type == T.nl do advance() nl_count = nl_count + 1 end
             if nl_count == 0 then more_statements = false end
             if not more_statements then break end
+            if tok.type == T.bodyout then break end
             statement_, err = statement() if err then return nil, err end
             if statement_ then table.insert(statements_, statement_) else reverse(advance_count) end
         end
@@ -981,6 +986,26 @@ local function interpret(ast, global_context)
             value, context, returning, err = self[node.node.type](self, node.node, context) if err then return nil, context, false, err end
             return value, context, true
         end,
+        ifExprNode = function(self, node, context)
+            local value, returning, condition, err
+            local done = false
+            for i = 1, #node.cases do
+                condition, context, returning, err = self[node.conditions[i].type](self, node.conditions[i], context) if err then return nil, context, false, err end
+                if condition.value then
+                    done = true
+                    value, context, returning, err = self[node.bodies[i].type](self, node.bodies[i], context) if err then return nil, context, false, err end
+                    break
+                end
+            end
+            if not done and node.else_body then
+                value, context, returning, err = self[node.else_body.type](self, node.else_body, context) if err then return nil, context, false, err end
+            end
+            if value then
+                if returning then return value, context, true end
+                if done then return Bool(true), context else return Bool(false), context end
+            end
+            return Null(), context, returning
+        end
     }
     local value, err, returning
     value, global_context, returning, err = visit[ast.type](visit, ast, global_context)
