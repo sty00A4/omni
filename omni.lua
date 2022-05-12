@@ -116,7 +116,7 @@ local S = {
     ["&"] = T.and_, ["|"] = T.or_,
 }
 local K = {
-    valDef = "val", constDef = "const", typeDef = "type",
+    nameDefGlobal = "var", constDef = "const", typeDef = "type",
     ["if"] = "if", ["else"] = "else", ["elif"] = "elif", ["while"] = "while", ["for"] = "for", ["switch"] = "switch", ["case"] = "case", ["default"] = "default",
     ["then"] = "then", ["do"] = "do",
     ["in"] = "in", ["of"] = "of",
@@ -249,20 +249,14 @@ local function lex(fn, text)
     return tokens
 end
 ---Parser
-function ValCreateNode(name_tok, expr)
-    if expr then
-        return { type = "valCreateNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
-                 repr = function(self) return "( val "..tostring(self.name_tok).." "..tostring(self.expr).." )" end
-        }
-    else
-        return { type = "valCreateNode", name_tok = name_tok, pos_start = name_tok.pos_start, pos_end = name_tok.pos_end,
-                 repr = function(self) return "( val "..tostring(self.name_tok).." )" end
-        }
-    end
+function VarCreateNode(name_tok, kw, expr)
+    return { type = "nameCreateNode", kw = kw, name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
+             repr = function(self) return "( "..self.kw.." "..tostring(self.name_tok).." "..tostring(self.expr).." )" end
+    }
 end
-function ConstCreateNode(name_tok, expr)
-    return { type = "constCreateNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
-             repr = function(self) return "( const "..tostring(self.name_tok).." "..tostring(self.expr).." )" end
+function VarAssignNode(name_tok, expr)
+    return { type = "varAssignNode", name_tok = name_tok, expr = expr, pos_start = name_tok.pos_start, pos_end = expr.pos_end,
+             repr = function(self) return "( "..tostring(self.name_tok).." = "..tostring(self.expr).." )" end
     }
 end
 function BinOpNode(left, op_tok, right)
@@ -365,7 +359,7 @@ local function parse(tokens)
         update_tok()
     end
     advance()
-    local bin_op, list_expr, if_expr, if_statement, atom, index, call, safe, power, factor, term, arith_expr, comp_expr, expr, statement, statements
+    local bin_op, list_expr, if_expr, if_statement, atom, index, call, safe, power, factor, term, arith_expr, comp_expr, assign, expr, statement, statements
     bin_op =  function (func1, ops, func2)
         if not func2 then func2 = func1 end
         local left, err = func1() if err then return nil, err end
@@ -538,12 +532,17 @@ local function parse(tokens)
         local node, err = bin_op(arith_expr, { T.ee, T.ne, T.lt, T.gt, T.lte, T.gte }) if err then return nil, err end
         return node
     end
-    expr = function()
+    assign = function()
         local node, err = bin_op(comp_expr, { T.and_, T.or_ }) if err then return nil, err end
         return node
     end
+    expr = function()
+        local node, err = bin_op(assign, { T.eq }) if err then return nil, err end
+        return node
+    end
     statement = function()
-        if tok:matches(Token(T.keyword, K.valDef)) then
+        if tok:matches(Token(T.keyword, K.nameDefGlobal)) or tok:matches(Token(T.keyword, K.constDef)) then
+            local kw = tok.value
             advance()
             if not (tok.type == T.name) then return nil, Error("invalid syntax", "expected name", tok.pos_start, tok.pos_end) end
             local name = tok
@@ -551,9 +550,9 @@ local function parse(tokens)
             if (tok.type == T.eq) then
                 advance()
                 local node, err = expr() if err then return nil, err end
-                return ValCreateNode(name, node)
+                return VarCreateNode(name, kw, node)
             else
-                return ValCreateNode(name)
+                return VarCreateNode(name, kw)
             end
         end
         if tok:matches(Token(T.keyword, K["return"])) then
@@ -851,22 +850,23 @@ function List(list)
     end
     return class
 end
-function Context(variables)
-    return { vars = variables,
-             copy = function(self) return Context(self.vars) end,
+function Context(names)
+    return { names = names,
+             copy = function(self) return Context(self.names) end,
              get = function(self, name_tok)
-                 if not self.vars[name_tok.value] then return nil, self, Error("undefined error", "name is not defined", name_tok.pos_start, name_tok.pos_end) end
-                 return self.vars[name_tok.value].value, self
+                 if not self.names[name_tok.value] then return nil, self, false, Error("undefined error", "name is not defined", name_tok.pos_start, name_tok.pos_end) end
+                 return self.names[name_tok.value].value, self
              end,
              create = function(self, kw, name_tok, init_value)
-                 if self.vars[name_tok.value] then return nil, self, Error("name error", "variable is already created", name_tok.pos_start, name_tok.pos_end) end
-                 if init_value then self.vars[name_tok.value] = { value = init_value, type = kw } else self.vars[name_tok.value] = { value = Null(), type = kw } end
-                 return self.vars[name_tok.value].value, self
+                 if self.names[name_tok.value] then return nil, self, false, Error("name error", "name is already created", name_tok.pos_start, name_tok.pos_end) end
+                 if init_value then self.names[name_tok.value] = { value = init_value, type = kw } else self.names[name_tok.value] = { value = Null(), type = kw } end
+                 return self.names[name_tok.value].value, self
              end,
              set = function(self, name_tok, value)
-                 if self.vars[name_tok.value].kw == "const" then return nil, self, Error("name error", "cannot alter value of a constant variable", name_tok.pos_start, name_tok.pos_end) end
-                 self.vars[name_tok.value].value = value
-                 return self.vars[name_tok.value].value, self
+                 if not self.names[name_tok.value] then return nil, self, false, Error("name error", "name is not defined", name_tok.pos_start, name_tok.pos_end) end
+                 if self.names[name_tok.value].type == "const" then return nil, self, false, Error("name error", "cannot alter value of a constant name", name_tok.pos_start, name_tok.pos_end) end
+                 self.names[name_tok.value].value = value
+                 return self.names[name_tok.value].value, self
              end
     }
 end
@@ -874,6 +874,15 @@ local function interpret(ast, global_context)
     local visit = {
         binOpNode = function(self, node, context)
             local op_tok = node.op_tok
+            if op_tok.type == T.eq then
+                if node.left.type == "nameNode" then
+                    local value, returning, err
+                    value, context, returning, err = self[node.right.type](self, node.right, context) if err then return nil, context, false, err end
+                    value, context, returning, err = context:set(node.left.name_tok, value) if err then return nil, context, false, err end
+                    return value, context, returning
+                end
+                return nil, context, false, Error("assign error", "can only assing value to name", node.pos_start, node.pos_end)
+            end
             local left, right, value, returning, err
             left, context, returning, err = self[node.left.type](self, node.left, context) if err then return nil, context, false, err end
             right, context, returning, err = self[node.right.type](self, node.right, context) if err then return nil, context, false, err end
@@ -961,11 +970,11 @@ local function interpret(ast, global_context)
             value, context, err = context:get(node.name_tok) if err then return nil, context, false, err end
             return value, context
         end,
-        valCreateNode = function(self, node, context)
+        nameCreateNode = function(self, node, context)
             local value, err, returning
             if node.expr then value, context, returning, err = self[node.expr.type](self, node.expr, context) if err then return nil, context, false, err end
             else value = Null() end
-            value, context, returning, err = context:create("val", node.name_tok, value) if err then return nil, context, false, err end
+            value, context, returning, err = context:create(node.kw, node.name_tok, value) if err then return nil, context, false, err end
             if value then return value, context else return Null(), context end
         end,
         bodyNode = function(self, node, context)
